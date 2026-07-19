@@ -937,6 +937,276 @@ async def stream_cartesia_pcm(
             stream.close()
 
 
+async def stream_elevenlabs_pcm(
+    text: str,
+    voice_id: Optional[str],
+    base_url: Optional[str] = None,
+    speed: Optional[float] = None,
+    sample_rate: int = SAMPLE_RATE,
+    save_audio: bool = False,
+    audio_dir: Optional[Path] = None,
+    conversation_id: Optional[str] = None,
+) -> Tuple[bool, StreamMetrics]:
+    """Stream raw PCM int16 from ElevenLabs and play chunks as they arrive."""
+    from . import elevenlabs_tts
+
+    metrics = StreamMetrics()
+    start_time = time.perf_counter()
+    stream = None
+    first_chunk_time = None
+    # VM-1685: always accumulate the rendered PCM for the history buffer (used
+    # whether or not SAVE_AUDIO is on); the on-disk save reads from it too.
+    audio_buffer = io.BytesIO()
+    bytes_received = 0
+    chunk_count = 0
+    control_stopped = False
+    transport_interrupted = False
+    # VM-1685 (impl-drain-restart): drain-on-interrupt state (see stream_pcm_audio).
+    drain_reason = None
+    remainder_chunks = []
+    captured = False
+    event_logger = get_event_logger()
+
+    try:
+        stream = sd.OutputStream(samplerate=sample_rate, channels=1, dtype="int16")
+        stream.start()
+
+        aborted = False
+
+        def _abort_once():
+            nonlocal aborted
+            if not aborted:
+                _abort_stream(stream)
+                aborted = True
+
+        if event_logger:
+            event_logger.log_event(event_logger.TTS_PLAYBACK_START)
+
+        logger.info("Starting ElevenLabs streaming")
+
+        playing = True
+        async for chunk in elevenlabs_tts.stream(
+            text=text,
+            voice_id=voice_id,
+            base_url=base_url,
+            sample_rate=sample_rate,
+            speed=speed,
+        ):
+            if not chunk:
+                continue
+            if playing:
+                # VM-1676/VM-1739: stop / skip_forward cut immediately + discard.
+                # VM-1685: skip_back / pause stop playing but keep DRAINING into the
+                # buffer so the full utterance is captured (see stream_pcm_audio).
+                snap = get_control_state().snapshot()
+                if snap.is_stopped:
+                    control_stopped = True
+                    _abort_once()
+                    break
+                if snap.is_skip_forward:
+                    transport_interrupted = True
+                    _abort_once()
+                    break
+                if snap.pending_transport:
+                    transport_interrupted = True
+                    drain_reason = "transport"
+                    playing = False
+                    _abort_once()
+                elif snap.is_paused:
+                    drain_reason = "pause"
+                    playing = False
+
+            if first_chunk_time is None:
+                first_chunk_time = time.perf_counter()
+                logger.info(
+                    f"ElevenLabs first audio chunk after {first_chunk_time - start_time:.3f}s"
+                )
+                if event_logger:
+                    event_logger.log_event(event_logger.TTS_FIRST_AUDIO)
+
+            audio_buffer.write(chunk)
+            if playing:
+                audio_array = np.frombuffer(chunk, dtype=np.int16)
+                stream.write(audio_array)
+            else:
+                remainder_chunks.append(chunk)
+
+            chunk_count += 1
+            bytes_received += len(chunk)
+
+        # VM-1676/VM-1739: stop / skip_forward already aborted + discard.
+        if control_stopped:
+            logger.info("ElevenLabs TTS playback stopped via control channel")
+            metrics.chunks_received = chunk_count
+            metrics.chunks_played = chunk_count
+            metrics.generation_time = (first_chunk_time - start_time) if first_chunk_time else 0.0
+            metrics.playback_time = time.perf_counter() - start_time
+            metrics.ttfa = metrics.generation_time
+            metrics.control_stopped = True
+            if event_logger:
+                event_logger.log_event(event_logger.TTS_PLAYBACK_END, {
+                    "metrics": {"control_stopped": True, "chunks": chunk_count, "provider": "elevenlabs"}
+                })
+            return True, metrics
+
+        if transport_interrupted and drain_reason is None:
+            logger.info("ElevenLabs TTS playback interrupted by skip_forward (advancing to record)")
+            metrics.chunks_received = chunk_count
+            metrics.chunks_played = chunk_count
+            metrics.generation_time = (first_chunk_time - start_time) if first_chunk_time else 0.0
+            metrics.playback_time = time.perf_counter() - start_time
+            metrics.ttfa = metrics.generation_time
+            metrics.transport_interrupted = True
+            if event_logger:
+                event_logger.log_event(event_logger.TTS_PLAYBACK_END, {
+                    "metrics": {"transport_interrupted": True, "chunks": chunk_count, "provider": "elevenlabs"}
+                })
+            return True, metrics
+
+        # Stream drained to completion (natural or a recoverable skip_back / pause).
+        full_pcm = audio_buffer.getvalue()
+
+        if drain_reason == "pause":
+            _capture_utterance(
+                text=text,
+                pcm_bytes=full_pcm,
+                sample_rate=sample_rate,
+                channels=1,
+                voice=voice_id,
+                conversation_id=conversation_id,
+            )
+            captured = True
+            outcome = await _hold_and_play_remainder(
+                stream, remainder_chunks, get_control_state()
+            )
+            if outcome == REPLAY_STOPPED:
+                control_stopped = True
+            elif outcome == REPLAY_TRANSPORT:
+                transport_interrupted = True
+                drain_reason = "transport"
+
+        if control_stopped:
+            logger.info("ElevenLabs TTS playback stopped via control channel (after pause-drain)")
+            _abort_once()
+            metrics.chunks_received = chunk_count
+            metrics.chunks_played = chunk_count
+            metrics.generation_time = (first_chunk_time - start_time) if first_chunk_time else 0.0
+            metrics.playback_time = time.perf_counter() - start_time
+            metrics.ttfa = metrics.generation_time
+            metrics.control_stopped = True
+            if event_logger:
+                event_logger.log_event(event_logger.TTS_PLAYBACK_END, {
+                    "metrics": {"control_stopped": True, "chunks": chunk_count, "provider": "elevenlabs"}
+                })
+            return True, metrics
+
+        if drain_reason == "transport":
+            logger.info("ElevenLabs TTS interrupted by transport request (skip_back) -- full utterance captured")
+            _abort_once()
+            if not captured:
+                _capture_utterance(
+                    text=text,
+                    pcm_bytes=full_pcm,
+                    sample_rate=sample_rate,
+                    channels=1,
+                    voice=voice_id,
+                    conversation_id=conversation_id,
+                )
+                captured = True
+            metrics.chunks_received = chunk_count
+            metrics.chunks_played = chunk_count
+            metrics.generation_time = (first_chunk_time - start_time) if first_chunk_time else 0.0
+            metrics.playback_time = time.perf_counter() - start_time
+            metrics.ttfa = metrics.generation_time
+            metrics.transport_interrupted = True
+            if event_logger:
+                event_logger.log_event(event_logger.TTS_PLAYBACK_END, {
+                    "metrics": {"transport_interrupted": True, "chunks": chunk_count, "provider": "elevenlabs"}
+                })
+            return True, metrics
+
+        stream.stop()
+        end_time = time.perf_counter()
+
+        metrics.chunks_received = chunk_count
+        metrics.chunks_played = chunk_count
+        metrics.generation_time = (
+            (first_chunk_time - start_time) if first_chunk_time else 0.0
+        )
+        metrics.playback_time = end_time - start_time
+        metrics.ttfa = metrics.generation_time
+
+        if event_logger:
+            event_logger.log_event(
+                event_logger.TTS_PLAYBACK_END,
+                {
+                    "metrics": {
+                        "ttfa_ms": round(metrics.ttfa * 1000, 1),
+                        "total_time_ms": round(metrics.playback_time * 1000, 1),
+                        "bytes_received": bytes_received,
+                        "chunks": chunk_count,
+                        "format": "pcm",
+                        "sample_rate_hz": sample_rate,
+                        "provider": "elevenlabs",
+                    }
+                },
+            )
+
+        logger.info(
+            f"ElevenLabs streaming complete - TTFA: {metrics.ttfa:.3f}s, "
+            f"Total: {metrics.playback_time:.3f}s, Chunks: {chunk_count}"
+        )
+
+        # VM-1685: capture the rendered utterance for skip-back replay (raw PCM
+        # already accumulated above), regardless of SAVE_AUDIO. Skipped if a
+        # pause-drain already captured the full utterance.
+        if not captured:
+            _capture_utterance(
+                text=text,
+                pcm_bytes=full_pcm,
+                sample_rate=sample_rate,
+                channels=1,
+                voice=voice_id,
+                conversation_id=conversation_id,
+            )
+
+        if save_audio and audio_dir and bytes_received > 0:
+            try:
+                from .core import save_debug_file
+                import wave
+                import tempfile
+                import os
+
+                audio_buffer.seek(0)
+                pcm_data = audio_buffer.read()
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
+                    with wave.open(tmp_wav.name, "wb") as wav_file:
+                        wav_file.setnchannels(1)
+                        wav_file.setsampwidth(2)
+                        wav_file.setframerate(sample_rate)
+                        wav_file.writeframes(pcm_data)
+                    with open(tmp_wav.name, "rb") as f:
+                        wav_data = f.read()
+                    os.unlink(tmp_wav.name)
+                audio_path = save_debug_file(
+                    wav_data, "tts", "wav", audio_dir, True, conversation_id
+                )
+                if audio_path:
+                    metrics.audio_path = audio_path
+                    update_latest_symlinks(audio_path, "tts")
+            except Exception as e:
+                logger.error(f"Failed to save ElevenLabs TTS audio: {e}")
+
+        return True, metrics
+
+    except Exception as e:
+        logger.error(f"ElevenLabs streaming failed: {e}")
+        return False, metrics
+    finally:
+        if stream:
+            stream.close()
+
+
 async def stream_tts_audio(
     text: str,
     openai_client,

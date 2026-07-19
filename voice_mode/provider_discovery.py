@@ -29,6 +29,8 @@ def detect_provider_type(base_url: str) -> str:
     """Detect provider type from base URL."""
     if not base_url:
         return "unknown"
+    if "api.elevenlabs.io" in base_url:
+        return "elevenlabs"
     if "openai.com" in base_url:
         return "openai"
     elif "api.cartesia.ai" in base_url:
@@ -120,6 +122,11 @@ class ProviderRegistry:
                     voices = [v for v in config.TTS_VOICES if uuid_re.match(v)]
                     if config.CARTESIA_VOICE_ID and config.CARTESIA_VOICE_ID not in voices:
                         voices.insert(0, config.CARTESIA_VOICE_ID)
+                elif provider_type == "elevenlabs":
+                    # ElevenLabs voice ids are ~20-char alphanumeric (not UUIDs),
+                    # so seed from config directly rather than a shape heuristic.
+                    models = [config.ELEVENLABS_MODEL, config.ELEVENLABS_FALLBACK_MODEL]
+                    voices = [config.ELEVENLABS_VOICE_ID] if config.ELEVENLABS_VOICE_ID else []
                 else:
                     models = ["tts-1"]
                     voices = ["af_alloy", "af_aoede", "af_bella", "af_heart", "af_jadzia", "af_jessica", "af_kore", "af_nicole", "af_nova", "af_river", "af_sarah", "af_sky", "af_v0", "af_v0bella", "af_v0irulan", "af_v0nicole", "af_v0sarah", "af_v0sky", "am_adam", "am_echo", "am_eric", "am_fenrir", "am_liam", "am_michael", "am_onyx", "am_puck", "am_santa", "am_v0adam", "am_v0gurney", "am_v0michael", "bf_alice", "bf_emma", "bf_lily", "bf_v0emma", "bf_v0isabella", "bm_daniel", "bm_fable", "bm_george", "bm_lewis", "bm_v0george", "bm_v0lewis", "ef_dora", "em_alex", "em_santa", "ff_siwis", "hf_alpha", "hf_beta", "hm_omega", "hm_psi", "if_sara", "im_nicola", "jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo", "pf_dora", "pm_alex", "pm_santa", "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi", "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang"]
@@ -189,6 +196,20 @@ class ProviderRegistry:
                 provider_type="cartesia",
                 last_check=datetime.now(timezone.utc).isoformat(),
                 last_error=None if config.CARTESIA_API_KEY else "CARTESIA_API_KEY not set",
+            )
+            return
+
+        # ElevenLabs is not OpenAI-compatible either; skip /v1/models probing
+        # and populate from config directly (mirrors the Cartesia block above).
+        if detect_provider_type(base_url) == "elevenlabs":
+            voices = [config.ELEVENLABS_VOICE_ID] if config.ELEVENLABS_VOICE_ID else []
+            self.registry[service_type][base_url] = EndpointInfo(
+                base_url=base_url,
+                models=[config.ELEVENLABS_MODEL, config.ELEVENLABS_FALLBACK_MODEL],
+                voices=voices,
+                provider_type="elevenlabs",
+                last_check=datetime.now(timezone.utc).isoformat(),
+                last_error=None if config.ELEVENLABS_API_KEY else "ELEVENLABS_API_KEY not set",
             )
             return
 

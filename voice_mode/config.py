@@ -740,6 +740,12 @@ CARTESIA_VOICE_ID = os.getenv("VOICEMODE_CARTESIA_VOICE_ID", "")
 CARTESIA_MODEL = os.getenv("VOICEMODE_CARTESIA_MODEL", "sonic-3")
 CARTESIA_FALLBACK_MODEL = os.getenv("VOICEMODE_CARTESIA_FALLBACK_MODEL", "sonic-2")
 
+# ElevenLabs configuration (https://elevenlabs.io)
+ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
+ELEVENLABS_VOICE_ID = os.getenv("VOICEMODE_ELEVENLABS_VOICE_ID", "")
+ELEVENLABS_MODEL = os.getenv("VOICEMODE_ELEVENLABS_MODEL", "eleven_flash_v2_5")
+ELEVENLABS_FALLBACK_MODEL = os.getenv("VOICEMODE_ELEVENLABS_FALLBACK_MODEL", "eleven_multilingual_v2")
+
 # Helper function to parse comma-separated lists
 def parse_comma_list(env_var: str, fallback: str) -> list:
     """Parse comma-separated list from environment variable."""
@@ -790,7 +796,7 @@ TTS_MODELS_BY_PROVIDER = parse_provider_models("VOICEMODE_TTS_MODELS")
 # Built-in per-provider defaults, used when neither an explicit caller model,
 # a per-provider env override, nor a compatible global TTS_MODELS entry applies.
 # Everything not listed falls back to "tts-1".
-TTS_MODEL_PROVIDER_DEFAULTS = {"mlx-audio": "mlx-community/Kokoro-82M-bf16"}
+TTS_MODEL_PROVIDER_DEFAULTS = {"mlx-audio": "mlx-community/Kokoro-82M-bf16", "elevenlabs": ELEVENLABS_MODEL}
 TTS_MODEL_DEFAULT = "tts-1"
 
 # STT prompt for vocabulary biasing (helps with specialized terminology)
@@ -1527,6 +1533,12 @@ def get_provider_supported_formats(provider: str, operation: str = "tts") -> lis
         "cartesia": {
             # Cartesia streaming emits raw PCM; buffered /tts/bytes returns WAV.
             "tts": ["pcm", "wav"],
+            "stt": []
+        },
+        "elevenlabs": {
+            # ElevenLabs streams and buffers raw PCM via output_format; it can
+            # also wrap output as WAV/MP3 for non-streaming use.
+            "tts": ["pcm", "wav", "mp3"],
             "stt": []
         },
         # STT providers

@@ -259,6 +259,8 @@ async def text_to_speech(
         # Determine provider from base URL (simple heuristic)
         if "api.cartesia.ai" in tts_base_url:
             provider = "cartesia"
+        elif "api.elevenlabs.io" in tts_base_url:
+            provider = "elevenlabs"
         elif "openai" in tts_base_url:
             provider = "openai"
         else:
@@ -319,15 +321,16 @@ async def text_to_speech(
         generation_start = time.perf_counter()
         
         # Check if streaming is enabled and format is supported.
-        # Cartesia streams via its own SSE endpoint and currently emits raw
-        # PCM only, so we only stream when the validated format is pcm and
-        # fall back to the buffered WAV path otherwise. OpenAI/Kokoro stream
-        # over the OpenAI-compatible HTTP response.
-        if provider == "cartesia":
+        # Cartesia streams via its own SSE endpoint and ElevenLabs via its own
+        # stream endpoint; both currently emit raw PCM only, so we only stream
+        # when the validated format is pcm and fall back to the buffered path
+        # otherwise. OpenAI/Kokoro stream over the OpenAI-compatible HTTP
+        # response.
+        if provider in ("cartesia", "elevenlabs"):
             use_streaming = STREAMING_ENABLED and validated_format == "pcm"
             if STREAMING_ENABLED and validated_format != "pcm":
                 logger.info(
-                    f"Cartesia streaming only supports pcm; "
+                    f"{provider.capitalize()} streaming only supports pcm; "
                     f"falling back to buffered playback for format {validated_format}"
                 )
         else:
@@ -342,6 +345,18 @@ async def text_to_speech(
                 success, stream_metrics = await stream_cartesia_pcm(
                     text=text,
                     voice_id=tts_voice,
+                    speed=speed,
+                    sample_rate=SAMPLE_RATE,
+                    save_audio=save_audio,
+                    audio_dir=audio_dir,
+                    conversation_id=conversation_id,
+                )
+            elif provider == "elevenlabs":
+                from .streaming import stream_elevenlabs_pcm
+                success, stream_metrics = await stream_elevenlabs_pcm(
+                    text=text,
+                    voice_id=tts_voice,
+                    base_url=tts_base_url,
                     speed=speed,
                     sample_rate=SAMPLE_RATE,
                     save_audio=save_audio,
@@ -404,6 +419,16 @@ async def text_to_speech(
                 speed=speed,
             )
             validated_format = "wav"
+        elif provider == "elevenlabs":
+            from . import elevenlabs_tts
+            response_content = await elevenlabs_tts.synthesize(
+                text=text,
+                voice_id=tts_voice,
+                base_url=tts_base_url,
+                sample_rate=SAMPLE_RATE,
+                speed=speed,
+            )
+            validated_format = "pcm"
         else:
             # Use context manager to ensure response is properly closed
             async with openai_clients[client_key].audio.speech.with_streaming_response.create(
@@ -708,6 +733,8 @@ async def synthesize_tts_audio(
         # Determine provider from base URL (mirrors text_to_speech)
         if "api.cartesia.ai" in tts_base_url:
             provider = "cartesia"
+        elif "api.elevenlabs.io" in tts_base_url:
+            provider = "elevenlabs"
         elif "openai" in tts_base_url:
             provider = "openai"
         else:
@@ -746,6 +773,16 @@ async def synthesize_tts_audio(
                 speed=speed,
             )
             validated_format = "wav"
+        elif provider == "elevenlabs":
+            from . import elevenlabs_tts
+            response_content = await elevenlabs_tts.synthesize(
+                text=text,
+                voice_id=tts_voice,
+                base_url=tts_base_url,
+                sample_rate=SAMPLE_RATE,
+                speed=speed,
+            )
+            validated_format = "pcm"
         else:
             async with openai_clients[client_key].audio.speech.with_streaming_response.create(
                 **request_params

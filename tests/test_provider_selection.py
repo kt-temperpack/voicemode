@@ -17,6 +17,13 @@ from voice_mode.providers import (
 class TestProviderTypeDetection:
     """Test provider type detection from URLs."""
     
+    def test_detect_cartesia(self):
+        assert detect_provider_type("https://api.cartesia.ai") == "cartesia"
+
+    def test_detect_elevenlabs(self):
+        assert detect_provider_type("https://api.elevenlabs.io") == "elevenlabs"
+        assert detect_provider_type("https://api.elevenlabs.io/v1") == "elevenlabs"
+
     def test_detect_openai(self):
         assert detect_provider_type("https://api.openai.com/v1") == "openai"
         assert detect_provider_type("https://api.openai.com/v1/") == "openai"
@@ -339,8 +346,8 @@ class TestModelCompatible:
             assert _model_compatible(pt, "tts-1")
             assert not _model_compatible(pt, "some/repo-id")
 
-    def test_local_unknown_cartesia_accept_anything(self):
-        for pt in ("local", "unknown", "cartesia"):
+    def test_local_unknown_cartesia_elevenlabs_accept_anything(self):
+        for pt in ("local", "unknown", "cartesia", "elevenlabs"):
             assert _model_compatible(pt, "tts-1")
             assert _model_compatible(pt, "some/repo-id")
 
