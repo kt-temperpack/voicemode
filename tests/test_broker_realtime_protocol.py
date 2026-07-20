@@ -433,6 +433,14 @@ def test_decode_session_update_preserves_push_to_talk_state():
     assert event.config.turn_detection_enabled is False
 
 
+def test_initial_call_session_honors_push_to_talk_configuration():
+    codec = OpenAIRealtimeCodec(
+        session_config=RealtimeSessionConfig(turn_detection_enabled=False)
+    )
+
+    assert codec.build_call_session()["audio"]["input"]["turn_detection"] is None
+
+
 def test_client_event_correlation_is_bounded_and_rejects_duplicate_ids():
     counter = iter([*(f"evt_{index}" for index in range(MAX_REMEMBERED_IDS + 1)), "evt_1"])
     codec = OpenAIRealtimeCodec(

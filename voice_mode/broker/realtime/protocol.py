@@ -251,7 +251,9 @@ class OpenAIRealtimeCodec:
         self._client_mutation_order: deque[str] = deque()
 
     def build_call_session(self) -> JSONDict:
-        return self._session_document(turn_detection_enabled=True)
+        return self._session_document(
+            turn_detection_enabled=self.session_config.turn_detection_enabled
+        )
 
     def build_session_update(self, *, turn_detection_enabled: bool) -> BuiltClientEvent:
         session = self._session_document(turn_detection_enabled=turn_detection_enabled)
