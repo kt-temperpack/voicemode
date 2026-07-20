@@ -14,6 +14,7 @@ from ..types import (
     HostProbe,
     HostThreadSummary,
     HostTurn,
+    HostTurnState,
 )
 from .app_server_transport import (
     AppServerClosed,
@@ -25,14 +26,20 @@ from .app_server_transport import (
     AppServerTransportError,
 )
 from .base import HostAdapter, HostAdapterError, HostEventSink, Unsubscribe
+from .events import AppServerEventMapper
 
 
-_THREAD_CAPABILITIES = frozenset(
+_CAPABILITIES = frozenset(
     {
         HostCapability.LIST_THREADS,
         HostCapability.READ_THREAD,
         HostCapability.ATTACH_THREAD,
         HostCapability.CREATE_THREAD,
+        HostCapability.START_TURN,
+        HostCapability.STEER_TURN,
+        HostCapability.INTERRUPT_TURN,
+        HostCapability.SUBSCRIBE_EVENTS,
+        HostCapability.QUERY_DISPOSITION,
     }
 )
 
@@ -52,6 +59,8 @@ class AppServerHostAdapter(HostAdapter):
         self._request_timeout = request_timeout
         self._probe: HostProbe | None = None
         self._broker_owned: set[str] = set()
+        self._events = AppServerEventMapper()
+        self._transport_unsubscribe: Unsubscribe | None = None
 
     @classmethod
     def connect(
@@ -119,7 +128,7 @@ class AppServerHostAdapter(HostAdapter):
             self._probe = HostProbe(
                 "app-server",
                 True,
-                _THREAD_CAPABILITIES,
+                _CAPABILITIES,
                 str(version) if version else None,
             )
         return self._probe
@@ -182,7 +191,18 @@ class AppServerHostAdapter(HostAdapter):
         return replace(summary, title=label, broker_owned=True)
 
     def start_turn(self, *, request_id: str, thread_id: str, prompt: str) -> HostTurn:
-        return self._unsupported(HostCapability.START_TURN)
+        self._ensure_event_subscription()
+        result = self._request(
+            "turn/start",
+            {
+                "threadId": thread_id,
+                "input": [{"type": "text", "text": prompt}],
+                "clientUserMessageId": request_id,
+            },
+        )
+        turn_id = self._response_turn_id(result, "turn/start")
+        self._events.register_turn(request_id, thread_id, turn_id)
+        return HostTurn(request_id, thread_id, turn_id, HostTurnState.STARTED)
 
     def steer_turn(
         self,
@@ -192,7 +212,23 @@ class AppServerHostAdapter(HostAdapter):
         host_turn_id: str,
         prompt: str,
     ) -> HostTurn:
-        return self._unsupported(HostCapability.STEER_TURN)
+        self._ensure_event_subscription()
+        result = self._request(
+            "turn/steer",
+            {
+                "threadId": thread_id,
+                "expectedTurnId": host_turn_id,
+                "input": [{"type": "text", "text": prompt}],
+                "clientUserMessageId": request_id,
+            },
+        )
+        if not isinstance(result, dict) or result.get("turnId") != host_turn_id:
+            raise HostAdapterError(
+                HostErrorKind.HOST_REJECTION,
+                "turn/steer",
+                "Codex returned an invalid steer response",
+            )
+        return HostTurn(request_id, thread_id, host_turn_id, HostTurnState.STEERED)
 
     def interrupt_turn(
         self,
@@ -201,16 +237,49 @@ class AppServerHostAdapter(HostAdapter):
         thread_id: str,
         host_turn_id: str,
     ) -> HostTurn:
-        return self._unsupported(HostCapability.INTERRUPT_TURN)
+        self._ensure_event_subscription()
+        self._request(
+            "turn/interrupt",
+            {"threadId": thread_id, "turnId": host_turn_id},
+        )
+        disposition = self._events.wait_for_terminal(
+            host_turn_id, self._request_timeout
+        )
+        if disposition is not HostDisposition.CANCELLED:
+            raise HostAdapterError(
+                HostErrorKind.AMBIGUOUS,
+                "turn/interrupt",
+                "Codex did not confirm interruption before the deadline",
+            )
+        return HostTurn(request_id, thread_id, host_turn_id, HostTurnState.CANCELLED)
 
     def subscribe(self, sink: HostEventSink) -> Unsubscribe:
-        return self._unsupported(HostCapability.SUBSCRIBE_EVENTS)
+        self._ensure_event_subscription()
+        return self._events.subscribe(sink)
 
     def query_disposition(self, *, request_id: str, thread_id: str) -> HostDisposition:
-        return self._unsupported(HostCapability.QUERY_DISPOSITION)
+        return self._events.disposition(request_id, thread_id)
 
     def close(self) -> None:
+        if self._transport_unsubscribe is not None:
+            self._transport_unsubscribe()
+            self._transport_unsubscribe = None
         self._transport.close()
+
+    def _ensure_event_subscription(self) -> None:
+        if self._transport_unsubscribe is None:
+            self._transport_unsubscribe = self._transport.subscribe(self._events.consume)
+
+    def _response_turn_id(self, result: Any, operation: str) -> str:
+        turn = result.get("turn") if isinstance(result, dict) else None
+        turn_id = turn.get("id") if isinstance(turn, dict) else None
+        if not isinstance(turn_id, str):
+            raise HostAdapterError(
+                HostErrorKind.HOST_REJECTION,
+                operation,
+                f"Codex returned an invalid response for {operation}",
+            )
+        return turn_id
 
     def _response_summary(self, result: Any, operation: str) -> HostThreadSummary:
         if not isinstance(result, dict) or not isinstance(result.get("thread"), dict):

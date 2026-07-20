@@ -17,6 +17,7 @@ from .app_server_transport import (
     AppServerTransportError,
 )
 from .app_server import AppServerHostAdapter
+from .events import AppServerEventMapper
 from .selection import (
     ThreadSelection,
     ThreadSelectionSource,
@@ -38,6 +39,7 @@ __all__ = [
     "AppServerTransport",
     "AppServerTransportError",
     "AppServerHostAdapter",
+    "AppServerEventMapper",
     "ThreadSelection",
     "ThreadSelectionSource",
     "canonical_repo_root",

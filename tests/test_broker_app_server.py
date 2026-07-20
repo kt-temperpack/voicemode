@@ -1,9 +1,17 @@
 from collections import deque
 import pytest
 
-from voice_mode.broker import HostCapability, HostErrorKind
+from voice_mode.broker import (
+    HostCapability,
+    HostDisposition,
+    HostErrorKind,
+    HostTurnState,
+)
 from voice_mode.broker.hosts import AppServerHostAdapter, HostAdapterError
-from voice_mode.broker.hosts.app_server_transport import AppServerClosed
+from voice_mode.broker.hosts.app_server_transport import (
+    AppServerClosed,
+    AppServerRemoteError,
+)
 
 
 def thread_payload(
@@ -28,6 +36,7 @@ class ScriptedTransport:
         self.responses = deque(responses)
         self.calls = []
         self.closed = False
+        self.sinks = []
 
     def initialize(self, client_info, *, timeout):
         self.calls.append(("initialize", {"clientInfo": client_info}, timeout))
@@ -43,13 +52,31 @@ class ScriptedTransport:
         response = self.responses.popleft()
         if isinstance(response, BaseException):
             raise response
+        if callable(response):
+            return response(self)
         return response
+
+    def subscribe(self, sink):
+        self.sinks.append(sink)
+
+        def unsubscribe():
+            if sink in self.sinks:
+                self.sinks.remove(sink)
+
+        return unsubscribe
+
+    def publish(self, method, params, request_id=None):
+        message = {"method": method, "params": params}
+        if request_id is not None:
+            message["id"] = request_id
+        for sink in tuple(self.sinks):
+            sink(message)
 
     def close(self):
         self.closed = True
 
 
-def adapter_with(*responses):
+def adapter_with(*responses, request_timeout=10.0):
     transport = ScriptedTransport(*responses)
     adapter = AppServerHostAdapter(
         transport,
@@ -59,6 +86,7 @@ def adapter_with(*responses):
             "platformOs": "macos",
             "userAgent": "codex-test",
         },
+        request_timeout=request_timeout,
     )
     return adapter, transport
 
@@ -92,6 +120,11 @@ def test_probe_discovers_thread_contract_and_is_cached():
             HostCapability.READ_THREAD,
             HostCapability.ATTACH_THREAD,
             HostCapability.CREATE_THREAD,
+            HostCapability.START_TURN,
+            HostCapability.STEER_TURN,
+            HostCapability.INTERRUPT_TURN,
+            HostCapability.SUBSCRIBE_EVENTS,
+            HostCapability.QUERY_DISPOSITION,
         }
     )
     assert [call[0] for call in transport.calls] == ["thread/list"]
@@ -140,32 +173,113 @@ def test_read_attach_and_create_use_current_codex_methods(tmp_path):
     ]
 
 
-@pytest.mark.parametrize(
-    "invoke",
-    [
-        lambda adapter: adapter.start_turn(
-            request_id="request", thread_id="thread", prompt="prompt"
+def test_start_and_steer_preserve_request_correlation_without_policy_overrides():
+    adapter, transport = adapter_with(
+        {"turn": {"id": "turn-1", "items": [], "status": "inProgress"}},
+        {"turnId": "turn-1"},
+    )
+
+    started = adapter.start_turn(
+        request_id="request-1", thread_id="thread-1", prompt="inspect"
+    )
+    steered = adapter.steer_turn(
+        request_id="request-2",
+        thread_id="thread-1",
+        host_turn_id="turn-1",
+        prompt="also test",
+    )
+
+    assert started.state is HostTurnState.STARTED
+    assert steered.state is HostTurnState.STEERED
+    assert adapter.query_disposition(
+        request_id="request-1", thread_id="thread-1"
+    ) is HostDisposition.IN_PROGRESS
+    assert transport.calls == [
+        (
+            "turn/start",
+            {
+                "threadId": "thread-1",
+                "input": [{"type": "text", "text": "inspect"}],
+                "clientUserMessageId": "request-1",
+            },
+            10.0,
         ),
-        lambda adapter: adapter.steer_turn(
-            request_id="request",
-            thread_id="thread",
-            host_turn_id="turn",
-            prompt="prompt",
+        (
+            "turn/steer",
+            {
+                "threadId": "thread-1",
+                "expectedTurnId": "turn-1",
+                "input": [{"type": "text", "text": "also test"}],
+                "clientUserMessageId": "request-2",
+            },
+            10.0,
         ),
-        lambda adapter: adapter.interrupt_turn(
-            request_id="request", thread_id="thread", host_turn_id="turn"
-        ),
-        lambda adapter: adapter.query_disposition(
-            request_id="request", thread_id="thread"
-        ),
-    ],
-)
-def test_unimplemented_turn_operations_fail_before_transport_io(invoke):
-    adapter, transport = adapter_with()
+    ]
+
+
+def test_interrupt_waits_for_terminal_cancellation_evidence():
+    def confirm_interruption(transport):
+        transport.publish(
+            "turn/completed",
+            {
+                "threadId": "thread-1",
+                "turn": {"id": "turn-1", "items": [], "status": "interrupted"},
+            },
+        )
+        return {}
+
+    adapter, _transport = adapter_with(
+        {"turn": {"id": "turn-1", "items": [], "status": "inProgress"}},
+        confirm_interruption,
+    )
+    adapter.start_turn(request_id="request-1", thread_id="thread-1", prompt="work")
+
+    interrupted = adapter.interrupt_turn(
+        request_id="request-1", thread_id="thread-1", host_turn_id="turn-1"
+    )
+
+    assert interrupted.state is HostTurnState.CANCELLED
+    assert adapter.query_disposition(
+        request_id="request-1", thread_id="thread-1"
+    ) is HostDisposition.CANCELLED
+
+
+def test_rejected_steer_is_not_converted_into_a_new_turn():
+    adapter, transport = adapter_with(
+        {"turn": {"id": "turn-1", "items": [], "status": "inProgress"}},
+        AppServerRemoteError(-32000, "turn cannot accept steering"),
+    )
+    adapter.start_turn(request_id="request-1", thread_id="thread-1", prompt="work")
+
     with pytest.raises(HostAdapterError) as caught:
-        invoke(adapter)
-    assert caught.value.kind is HostErrorKind.UNSUPPORTED
-    assert transport.calls == []
+        adapter.steer_turn(
+            request_id="request-2",
+            thread_id="thread-1",
+            host_turn_id="turn-1",
+            prompt="follow up",
+        )
+
+    assert caught.value.kind is HostErrorKind.HOST_REJECTION
+    assert [call[0] for call in transport.calls] == ["turn/start", "turn/steer"]
+    assert adapter.query_disposition(
+        request_id="request-1", thread_id="thread-1"
+    ) is HostDisposition.IN_PROGRESS
+
+
+def test_interrupt_without_terminal_evidence_is_ambiguous():
+    adapter, _transport = adapter_with(
+        {"turn": {"id": "turn-1", "items": [], "status": "inProgress"}},
+        {},
+        request_timeout=0.01,
+    )
+    adapter.start_turn(request_id="request-1", thread_id="thread-1", prompt="work")
+
+    with pytest.raises(HostAdapterError) as caught:
+        adapter.interrupt_turn(
+            request_id="request-1", thread_id="thread-1", host_turn_id="turn-1"
+        )
+
+    assert caught.value.kind is HostErrorKind.AMBIGUOUS
 
 
 def test_transport_failure_is_classified_for_recovery():

@@ -1,10 +1,25 @@
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from voice_mode.broker.handsfree import HandsFreeLoop, control_intent, wake_command
+from voice_mode.broker import handsfree as handsfree_module
+from voice_mode.broker import (
+    HostApprovalRequest,
+    HostCompletion,
+    HostEvent,
+    HostEventKind,
+    HostTurn,
+    HostTurnState,
+)
+from voice_mode.broker.handsfree import (
+    AppServerCodexRunner,
+    HandsFreeLoop,
+    control_intent,
+    wake_command,
+)
 from voice_mode.broker.runtime import BrokerRuntime
 
 
@@ -42,6 +57,56 @@ class FakeCodex:
         )
 
 
+class FakeAppServerAdapter:
+    def __init__(self):
+        self.sink = None
+        self.calls = []
+
+    def subscribe(self, sink):
+        self.sink = sink
+        return lambda: setattr(self, "sink", None)
+
+    def start_turn(self, *, request_id, thread_id, prompt):
+        self.calls.append(("start", request_id, thread_id, prompt))
+        assert self.sink is not None
+        approval = HostApprovalRequest(
+            request_id, thread_id, "turn-1", "approval-1", "Needs review"
+        )
+        self.sink(
+            HostEvent(
+                HostEventKind.APPROVAL_REQUIRED,
+                request_id,
+                thread_id,
+                "turn-1",
+                approval=approval,
+            )
+        )
+        completion = HostCompletion(
+            request_id,
+            thread_id,
+            "turn-1",
+            "Native response.",
+            "Native response.",
+            datetime.now(timezone.utc),
+        )
+        self.sink(
+            HostEvent(
+                HostEventKind.TURN_COMPLETED,
+                request_id,
+                thread_id,
+                "turn-1",
+                completion=completion,
+            )
+        )
+        return HostTurn(request_id, thread_id, "turn-1", HostTurnState.STARTED)
+
+    def steer_turn(self, **kwargs):
+        self.calls.append(("steer", kwargs))
+
+    def interrupt_turn(self, **kwargs):
+        self.calls.append(("interrupt", kwargs))
+
+
 def test_wake_and_control_parsing_is_strict():
     assert wake_command("Computer, check tests", "Computer") == "check tests"
     assert wake_command("Hey Computer, check tests", "Computer") == "check tests"
@@ -58,6 +123,115 @@ def test_wake_and_control_parsing_is_strict():
     assert control_intent("Nice.") == "ack"
     assert control_intent("Thank you!") == "ack"
     assert control_intent("please go to sleep after this") is None
+
+
+def test_app_server_runner_waits_for_one_native_completion_and_surfaces_approval():
+    adapter = FakeAppServerAdapter()
+    displayed = []
+    runner = AppServerCodexRunner(adapter, "thread-1", display=displayed.append)
+
+    result = runner.run_turn("inspect")
+
+    assert result.display_text == "Native response."
+    assert result.thread_id == "thread-1"
+    assert len(adapter.calls) == 1
+    assert "thread=thread-1" in displayed[0]
+    assert "approval=approval-1" in displayed[0]
+    runner.close()
+    assert adapter.sink is None
+
+
+def test_auto_adapter_uses_native_app_server_and_exact_thread(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeTransport:
+        def close(self):
+            calls.append("transport-close")
+
+    class FakeHost:
+        def close(self):
+            calls.append("host-close")
+
+    class FakeRunner:
+        def __init__(self, adapter, thread_id):
+            calls.append(("runner", adapter, thread_id))
+
+        def close(self):
+            calls.append("runner-close")
+
+    class FakeServer:
+        def start(self):
+            calls.append("server-start")
+
+        def serve_forever(self):
+            return None
+
+        def stop(self):
+            calls.append("server-stop")
+
+    class FakeAudioLifecycle:
+        def __init__(self, **kwargs):
+            calls.append(("audio", kwargs))
+
+        def start(self):
+            calls.append("audio-start")
+
+        def close(self):
+            calls.append("audio-close")
+
+    transport = FakeTransport()
+    host = FakeHost()
+    monkeypatch.setattr(
+        handsfree_module.AppServerTransport,
+        "start_process",
+        lambda **kwargs: transport,
+    )
+    monkeypatch.setattr(
+        handsfree_module.AppServerHostAdapter,
+        "connect",
+        lambda selected: host,
+    )
+
+    def fake_select(adapter, repo_root, **kwargs):
+        calls.append(("select", adapter, repo_root, kwargs))
+        return SimpleNamespace(thread=SimpleNamespace(thread_id="current-thread"))
+
+    monkeypatch.setattr(handsfree_module, "select_thread", fake_select)
+    monkeypatch.setattr(handsfree_module, "AppServerCodexRunner", FakeRunner)
+    monkeypatch.setattr(
+        handsfree_module,
+        "create_broker",
+        lambda *_args, **_kwargs: (BrokerRuntime(), None, FakeServer()),
+    )
+    monkeypatch.setattr(handsfree_module, "PersistentVoiceAudio", FakeAudioLifecycle)
+
+    def close_coroutine(coroutine):
+        calls.append("loop-run")
+        coroutine.close()
+
+    monkeypatch.setattr(handsfree_module.asyncio, "run", close_coroutine)
+
+    handsfree_module.run_handsfree_broker(
+        tmp_path / "broker.sock",
+        repo_root=tmp_path,
+        wake_phrase="Computer",
+        voice="am_michael",
+        voice_speed=1.25,
+        listen_duration=60,
+        min_duration=2,
+        codex_executable="codex",
+        codex_sandbox="workspace-write",
+        codex_model="model",
+        codex_reasoning_effort="low",
+        silence_threshold_ms=1000,
+        codex_adapter="auto",
+        codex_thread_id="current-thread",
+    )
+
+    selection = next(call for call in calls if isinstance(call, tuple) and call[0] == "select")
+    assert selection[3]["explicit_thread_id"] == "current-thread"
+    assert ("runner", host, "current-thread") in calls
+    assert calls[-2:] == ["runner-close", "host-close"]
 
 
 @pytest.mark.asyncio
