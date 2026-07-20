@@ -22,11 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with its `codex resume` command after the first turn. The hands-free Codex
   lane defaults to `gpt-5.6-terra` with low reasoning and a 1.4 second end-of-speech
   threshold for faster conversational turns, and transient local STT failures
-  no longer terminate the broker process. The always-listening broker uses one
-  confirmation tone after a real transcript; start tones, empty timeout
-  windows, and blank-audio transcripts stay silent so cues cannot interrupt a
-  prompt in progress. Both `Computer` and `Hey Computer` now activate the wake
-  parser.
+  no longer terminate the broker process. Cue playback follows conversation
+  state: a rising tone acknowledges a standalone wake phrase and a falling tone
+  confirms request submission, while empty timeouts, ambient speech, and blank
+  audio stay silent. Both `Computer` and `Hey Computer` activate the wake
+  parser, including normal trailing punctuation.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

@@ -56,6 +56,7 @@ async def test_stream_stays_open_across_speak_and_listen(monkeypatch):
         stream_factory=stream_factory,
         speak_callable=speak,
         transcribe_callable=transcribe,
+        listening_cue_callable=cue,
         submitted_cue_callable=cue,
     )
     monkeypatch.setattr(audio, "_capture_utterance", lambda: np.array([1, 2], dtype=np.int16))
@@ -73,8 +74,12 @@ async def test_stream_stays_open_across_speak_and_listen(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_submitted_cue_follows_real_transcript(monkeypatch):
+async def test_cues_are_explicit_state_machine_events(monkeypatch):
     events = []
+
+    async def listening_cue():
+        events.append("listening")
+        return True
 
     async def submitted_cue():
         events.append("submitted")
@@ -89,6 +94,7 @@ async def test_submitted_cue_follows_real_transcript(monkeypatch):
         listen_duration=20,
         min_duration=1,
         stream_factory=lambda **_kwargs: FakeStream(),
+        listening_cue_callable=listening_cue,
         submitted_cue_callable=submitted_cue,
         transcribe_callable=transcribe,
     )
@@ -101,12 +107,15 @@ async def test_submitted_cue_follows_real_transcript(monkeypatch):
     monkeypatch.setattr(audio, "_capture_utterance", capture)
 
     assert await audio.listen() == "captured"
-    assert events == ["captured", "transcribed", "submitted"]
+    assert events == ["captured", "transcribed"]
+    await audio.cue_listening()
+    await audio.cue_submitted()
+    assert events == ["captured", "transcribed", "listening", "submitted"]
     audio.close()
 
 
 @pytest.mark.asyncio
-async def test_no_submitted_cue_when_nothing_was_heard(monkeypatch):
+async def test_no_automatic_cue_when_nothing_was_heard(monkeypatch):
     events = []
 
     async def submitted_cue():
@@ -130,7 +139,7 @@ async def test_no_submitted_cue_when_nothing_was_heard(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_blank_transcript_does_not_rearm_or_play_submitted_cue(monkeypatch):
+async def test_blank_transcript_does_not_play_automatic_cue(monkeypatch):
     events = []
 
     async def submitted_cue():

@@ -7,10 +7,11 @@ thread, prints the complete answer, and speaks a separate one- or two-sentence
 summary. Follow-up speech stays in the same Codex thread until silence or an
 explicit sleep phrase closes the window.
 
-The microphone is always listening while the broker is ready, so it does not
-play a start tone. One falling confirmation tone plays only after a real
-utterance is transcribed and submitted; idle windows and blank audio stay
-silent. Set `VOICEMODE_AUDIO_FEEDBACK=false` to disable the confirmation cue.
+The microphone is always listening for the wake phrase. After a standalone
+`Hey Computer`, a rising cue acknowledges the wake and opens the request; a
+falling cue confirms that the completed request was submitted. The same pair
+brackets follow-up turns. Idle windows, ambient speech, and blank audio stay
+silent. Set `VOICEMODE_AUDIO_FEEDBACK=false` to disable both cues.
 
 ## Run and inspect it
 

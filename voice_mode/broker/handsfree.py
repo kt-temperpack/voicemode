@@ -20,7 +20,7 @@ EXIT_PHRASES = {"exit voice mode", "quit voice mode", "goodbye", "shut down"}
 
 def wake_command(text: str, wake_phrase: str) -> str | None:
     match = re.match(
-        rf"^\s*(?:hey[\s,]+)?{re.escape(wake_phrase)}(?:\s*[,;:\-]\s*|\s+|$)(.*?)\s*$",
+        rf"^\s*(?:hey[\s,]+)?{re.escape(wake_phrase)}(?:\s*[,;:.!?\-]\s*|\s+|$)(.*?)\s*$",
         text,
         flags=re.IGNORECASE,
     )
@@ -83,11 +83,12 @@ class HandsFreeLoop:
                 if pending is None:
                     continue
                 if not pending:
-                    await self.audio.speak("I'm listening.")
+                    await self.audio.cue_listening()
                     pending = await self._listen_safely()
                     if not pending:
                         continue
                     self.display(f"You: {pending}")
+                await self.audio.cue_submitted()
                 if control_intent(pending) == "exit":
                     await self.audio.speak("Hands-free Codex is stopping.")
                     self.runtime.begin_shutdown()
@@ -137,6 +138,7 @@ class HandsFreeLoop:
             self.runtime.accept_summary(session_id, turn.spoken_summary)
             self.display(f"\nCodex:\n{turn.display_text}\n")
             await self.audio.speak(turn.spoken_summary)
+            await self.audio.cue_listening()
             pending = await self._listen_safely()
             if self.runtime.snapshot().shutting_down:
                 return
@@ -146,6 +148,7 @@ class HandsFreeLoop:
                 session_id = None
                 self.display(f"Follow-up window closed. Say {self.wake_phrase} to wake me.")
                 continue
+            await self.audio.cue_submitted()
             self.display(f"You: {pending}")
             self.runtime.start_listening(session_id)
 

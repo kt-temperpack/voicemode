@@ -82,6 +82,12 @@ async def _play_submitted_cue() -> bool:
     return await play_chime_end()
 
 
+async def _play_listening_cue() -> bool:
+    from voice_mode.core import play_chime_start
+
+    return await play_chime_start()
+
+
 class PersistentVoiceAudio:
     """Keep one CoreAudio input stream open and segment utterances with VAD."""
 
@@ -95,6 +101,7 @@ class PersistentVoiceAudio:
         vad_factory=None,
         speak_callable: SpeakCallable = _speak_local,
         transcribe_callable: TranscribeCallable = _transcribe_local,
+        listening_cue_callable: CueCallable = _play_listening_cue,
         submitted_cue_callable: CueCallable = _play_submitted_cue,
         cues_enabled: bool = AUDIO_FEEDBACK_ENABLED,
         silence_threshold_ms: int = 650,
@@ -106,6 +113,7 @@ class PersistentVoiceAudio:
         self._vad_factory = vad_factory
         self._speak_callable = speak_callable
         self._transcribe_callable = transcribe_callable
+        self._listening_cue_callable = listening_cue_callable
         self._submitted_cue_callable = submitted_cue_callable
         self._cues_enabled = cues_enabled
         self._silence_threshold_ms = silence_threshold_ms
@@ -216,9 +224,21 @@ class PersistentVoiceAudio:
         transcript = await self._transcribe_callable(audio)
         if not transcript:
             return None
-        if self._cues_enabled:
-            await self._submitted_cue_callable()
         return transcript
+
+    async def cue_listening(self) -> None:
+        if self._cues_enabled:
+            self._muted.set()
+            self._drain()
+            await self._listening_cue_callable()
+            self._drain()
+
+    async def cue_submitted(self) -> None:
+        if self._cues_enabled:
+            self._muted.set()
+            self._drain()
+            await self._submitted_cue_callable()
+            self._drain()
 
     async def speak(self, message: str) -> None:
         self.start()

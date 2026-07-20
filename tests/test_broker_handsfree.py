@@ -10,12 +10,19 @@ class FakeAudio:
     def __init__(self, listens):
         self.listens = iter(listens)
         self.spoken = []
+        self.cues = []
 
     async def listen(self):
         return next(self.listens)
 
     async def speak(self, message):
         self.spoken.append(message)
+
+    async def cue_listening(self):
+        self.cues.append("listening")
+
+    async def cue_submitted(self):
+        self.cues.append("submitted")
 
 class FakeCodex:
     thread_id = "codex-1"
@@ -36,6 +43,8 @@ def test_wake_and_control_parsing_is_strict():
     assert wake_command("Computer, check tests", "Computer") == "check tests"
     assert wake_command("Hey Computer, check tests", "Computer") == "check tests"
     assert wake_command("hey, computer", "Computer") == ""
+    assert wake_command("Hey computer.", "Computer") == ""
+    assert wake_command("Hey computer! Check tests", "Computer") == "Check tests"
     assert wake_command("computer", "Computer") == ""
     assert wake_command("computerized", "Computer") is None
     assert wake_command("my computer is slow", "Computer") is None
@@ -77,6 +86,14 @@ async def test_loop_ignores_ambient_then_reuses_codex_for_followup(tmp_path):
     assert "Open it later: codex resume codex-1" in displayed
     assert runtime.snapshot().shutting_down is True
     assert runtime.snapshot().session is None
+    assert audio.cues == [
+        "submitted",
+        "listening",
+        "submitted",
+        "listening",
+        "submitted",
+        "submitted",
+    ]
 
 
 @pytest.mark.asyncio
