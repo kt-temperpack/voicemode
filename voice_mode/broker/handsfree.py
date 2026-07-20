@@ -5,23 +5,31 @@ from __future__ import annotations
 import asyncio
 import re
 import threading
+import time
 import unicodedata
 import uuid
 from pathlib import Path
 from typing import Callable
 
 from .audio import PersistentVoiceAudio
-from .codex import CodexAdapter, CodexTurn, CodexTurnError
+from .codex import CodexAdapter, CodexTurnError
 from .hosts import (
     AppServerHostAdapter,
     AppServerTransport,
+    ExecCodexAdapter,
+    HostAdapter,
     HostAdapterError,
     select_thread,
 )
+from .journal import TurnJournal
+from .recovery import RecoveryAction, RecoveryCoordinator
 from .runtime import BrokerRuntime
 from .server import create_broker
 from .presentation import Presenter
-from .types import HostEvent, HostEventKind
+from .types import CanonicalResponse, HostEvent, HostEventKind
+
+
+EXEC_NEW_THREAD_ID = "exec:new-separate-thread"
 
 
 SLEEP_PHRASES = {"go to sleep", "stop listening", "sleep"}
@@ -29,24 +37,31 @@ EXIT_PHRASES = {"exit voice mode", "quit voice mode", "goodbye", "shut down"}
 ACK_PHRASES = {"nice", "thanks", "thank you", "okay", "ok", "got it", "cool"}
 
 
-class AppServerCodexRunner:
-    """Blocking compatibility bridge over the host-native event lifecycle."""
+class HostTransportLost(CodexTurnError):
+    """The host connection disappeared after a dispatch boundary."""
+
+
+class HostTurnRunner:
+    """Wait for one correlated completion from any lifecycle-managed host."""
 
     def __init__(
         self,
-        adapter: AppServerHostAdapter,
+        adapter: HostAdapter,
         thread_id: str,
         *,
         display: Callable[[str], None] = print,
         turn_timeout: float = 30 * 60,
+        should_stop: Callable[[], bool] = lambda: False,
     ) -> None:
         self.adapter = adapter
         self.thread_id = thread_id
         self.display = display
         self.turn_timeout = turn_timeout
+        self.should_stop = should_stop
         self._condition = threading.Condition()
         self._terminal: dict[str, HostEvent] = {}
         self._active_turn_id: str | None = None
+        self._active_request_id: str | None = None
         self._unsubscribe = adapter.subscribe(self._on_event)
 
     def _on_event(self, event: HostEvent) -> None:
@@ -57,6 +72,12 @@ class AppServerCodexRunner:
                 f"thread={approval.thread_id} request={approval.request_id} "
                 f"approval={approval.approval_id} reason={approval.reason}"
             )
+            return
+        if event.kind is HostEventKind.TRANSPORT_LOST:
+            with self._condition:
+                if self._active_request_id is not None:
+                    self._terminal.setdefault(self._active_request_id, event)
+                self._condition.notify_all()
             return
         if event.kind not in {HostEventKind.TURN_COMPLETED, HostEventKind.TURN_CANCELLED}:
             return
@@ -72,10 +93,11 @@ class AppServerCodexRunner:
         *,
         request_id: str | None = None,
         on_started: Callable[[], None] | None = None,
-    ) -> CodexTurn:
+    ) -> CanonicalResponse:
         if not prompt.strip():
             raise ValueError("prompt must not be empty")
         request_id = request_id or str(uuid.uuid4())
+        self._active_request_id = request_id
         try:
             started = self.adapter.start_turn(
                 request_id=request_id,
@@ -83,19 +105,39 @@ class AppServerCodexRunner:
                 prompt=prompt,
             )
         except HostAdapterError as error:
+            self._active_request_id = None
             raise CodexTurnError(str(error)) from error
         self._active_turn_id = started.host_turn_id
         if on_started is not None:
             on_started()
+        deadline = time.monotonic() + self.turn_timeout
+        stopped = False
         with self._condition:
-            ready = self._condition.wait_for(
-                lambda: request_id in self._terminal,
-                timeout=self.turn_timeout,
-            )
+            while request_id not in self._terminal:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self._condition.wait(min(0.2, remaining))
+                if self.should_stop():
+                    stopped = True
+                    try:
+                        self.adapter.interrupt_turn(
+                            request_id=request_id,
+                            thread_id=self.thread_id,
+                            host_turn_id=started.host_turn_id,
+                        )
+                    except HostAdapterError:
+                        pass
+                    break
             event = self._terminal.pop(request_id, None)
         self._active_turn_id = None
-        if not ready or event is None:
-            raise CodexTurnError("Codex app-server turn exceeded its deadline")
+        self._active_request_id = None
+        if event is None:
+            if stopped:
+                raise CodexTurnError("Codex turn stopped with the broker")
+            raise CodexTurnError("Codex host turn exceeded its deadline")
+        if event.kind is HostEventKind.TRANSPORT_LOST:
+            raise HostTransportLost(event.error or "Codex host transport was lost")
         if event.kind is HostEventKind.TURN_CANCELLED:
             raise CodexTurnError("Codex turn was interrupted")
         if event.error:
@@ -105,14 +147,8 @@ class AppServerCodexRunner:
         text = event.completion.display_text.strip()
         if not text:
             raise CodexTurnError("Codex returned an empty final response")
-        return CodexTurn(
-            text,
-            event.completion.spoken_text,
-            self.thread_id,
-            request_id,
-            event.completion.host_turn_id,
-            event.completion.completed_at,
-        )
+        self.thread_id = event.completion.thread_id
+        return event.completion.canonical_response()
 
     def steer(self, prompt: str) -> None:
         if self._active_turn_id is None:
@@ -128,13 +164,23 @@ class AppServerCodexRunner:
         if self._active_turn_id is None:
             return
         self.adapter.interrupt_turn(
-            request_id=str(uuid.uuid4()),
+            request_id=self._active_request_id or str(uuid.uuid4()),
             thread_id=self.thread_id,
             host_turn_id=self._active_turn_id,
         )
 
     def close(self) -> None:
         self._unsubscribe()
+
+    def replace_adapter(self, adapter: HostAdapter) -> None:
+        self._unsubscribe()
+        self.adapter = adapter
+        self._unsubscribe = adapter.subscribe(self._on_event)
+
+
+# Keep the public name used by early adopters while the implementation is now
+# fully host-neutral.
+AppServerCodexRunner = HostTurnRunner
 
 
 def wake_command(text: str, wake_phrase: str) -> str | None:
@@ -170,21 +216,23 @@ class HandsFreeLoop:
         runtime: BrokerRuntime,
         audio: PersistentVoiceAudio,
         wake_phrase: str,
-        codex_factory: Callable[[Path], CodexAdapter],
-        initial_thread_id: str | None = None,
-        adapter_kind: str = "exec",
+        host_adapter: HostAdapter,
+        thread_id: str,
+        recovery: RecoveryCoordinator | None = None,
         display: Callable[[str], None] = print,
     ) -> None:
         self.repo_root = Path(repo_root).resolve()
         self.runtime = runtime
         self.audio = audio
         self.wake_phrase = wake_phrase
-        self.codex_factory = codex_factory
-        self.initial_thread_id = initial_thread_id
-        self.adapter_kind = adapter_kind
+        self.host_adapter = host_adapter
+        self.thread_id = thread_id
+        self.recovery = recovery
+        self.host_probe = host_adapter.probe()
         self.display = display
-        self._codex: CodexAdapter | None = None
-        self._shown_codex_thread: str | None = None
+        self._runner = HostTurnRunner(host_adapter, thread_id, display=display)
+        self._runner.should_stop = lambda: self.runtime.snapshot().shutting_down
+        self._shown_codex_thread: str | None = thread_id
         self._presenter = Presenter(
             runtime,
             display=lambda text: self.display(f"\nCodex:\n{text}\n"),
@@ -200,16 +248,18 @@ class HandsFreeLoop:
             pass
 
     async def run(self) -> None:
+        self.display(f"Codex adapter: {self.host_probe.adapter}")
+        if self.host_probe.reason:
+            self.display(f"Adapter note: {self.host_probe.reason}")
+        self.display(f"Repository: {self.repo_root}")
+        self.display(f"Codex thread: {self.thread_id}")
+        if self.thread_id != EXEC_NEW_THREAD_ID:
+            self.display(f"Open it later: codex resume {self.thread_id}")
+        self.display(f"Wake phrase: {self.wake_phrase}")
+        self.display("Hands-free Codex ready")
         await self.audio.speak(
             f"Hands-free Codex is ready. Say {self.wake_phrase}, followed by your request."
         )
-        self.display(f"Hands-free Codex ready in {self.repo_root}")
-        self.display(f"Wake phrase: {self.wake_phrase}")
-        self.display(f"Codex adapter: {self.adapter_kind}")
-        if self.initial_thread_id:
-            self.display(f"Codex thread: {self.initial_thread_id}")
-            self.display(f"Open it later: codex resume {self.initial_thread_id}")
-            self._shown_codex_thread = self.initial_thread_id
         session_id: str | None = None
         pending: str | None = None
 
@@ -236,14 +286,12 @@ class HandsFreeLoop:
                     self.runtime.begin_shutdown()
                     return
                 session = self.runtime.open_session(
-                    self.initial_thread_id or "handsfree", str(self.repo_root)
+                    self.thread_id, str(self.repo_root)
                 )
                 session_id = session.session_id
                 self.runtime.activate(session_id)
-                if self._codex is None:
-                    self._codex = self.codex_factory(self.repo_root)
 
-            assert pending is not None and session_id is not None and self._codex is not None
+            assert pending is not None and session_id is not None
             intent = control_intent(pending)
             if intent == "ack":
                 self._close_session(session_id)
@@ -268,7 +316,7 @@ class HandsFreeLoop:
             envelope = self.runtime.accept_turn(
                 session_id,
                 pending,
-                host_adapter=self.adapter_kind,
+                host_adapter=self.host_probe.adapter,
                 host_thread_id=active_session.codex_session_id,
             )
             assert envelope.request_id is not None
@@ -277,12 +325,19 @@ class HandsFreeLoop:
                 raise RuntimeError("accepted broker turn did not receive dispatch authority")
             self.display("Codex: working…")
             try:
-                turn = await asyncio.to_thread(
-                    self._codex.run_turn,
+                response = await asyncio.to_thread(
+                    self._runner.run_turn,
                     envelope.transcript,
                     request_id=envelope.request_id,
                     on_started=lambda: self.runtime.confirm_dispatch(envelope.request_id),
                 )
+            except HostTransportLost as error:
+                response = await self._recover_turn(envelope.request_id, error)
+                if response is None:
+                    self._close_session(session_id)
+                    session_id = None
+                    pending = None
+                    continue
             except CodexTurnError as error:
                 self.runtime.mark_dispatch_uncertain(envelope.request_id)
                 self.display(f"Codex error: {error}")
@@ -295,14 +350,16 @@ class HandsFreeLoop:
             if self.runtime.snapshot().shutting_down:
                 return
 
-            self.runtime.attach_codex_thread(session_id, turn.thread_id)
-            if turn.thread_id != self._shown_codex_thread:
-                self._shown_codex_thread = turn.thread_id
-                self.display(f"Codex thread: {turn.thread_id}")
-                self.display(f"Open it later: codex resume {turn.thread_id}")
+            self.thread_id = response.thread_id
+            self._runner.thread_id = response.thread_id
+            self.runtime.attach_codex_thread(session_id, response.thread_id)
+            if response.thread_id != self._shown_codex_thread:
+                self._shown_codex_thread = response.thread_id
+                self.display(f"Codex thread: {response.thread_id}")
+                self.display(f"Open it later: codex resume {response.thread_id}")
             self.runtime.confirm_dispatch(envelope.request_id)
-            self.runtime.accept_summary(session_id, turn.spoken_summary)
-            await self._presenter.present(turn.canonical_response(envelope.request_id))
+            self.runtime.accept_summary(session_id, response.spoken_text)
+            await self._presenter.present(response)
             await self.audio.cue_listening()
             pending = await self._listen_safely()
             if self.runtime.snapshot().shutting_down:
@@ -319,12 +376,40 @@ class HandsFreeLoop:
 
         self._close_session(session_id)
 
+    async def _recover_turn(
+        self, request_id: str, error: HostTransportLost
+    ) -> CanonicalResponse | None:
+        if self.recovery is None:
+            self.runtime.mark_dispatch_uncertain(request_id)
+            self.display(f"Codex connection lost: {error}")
+            await self.audio.speak("Codex disconnected. I stopped without retrying the request.")
+            return None
+        self.display("Codex connection lost; checking the exact turn before continuing…")
+        decision = await asyncio.to_thread(
+            self.recovery.recover,
+            request_id=request_id,
+            thread_id=self.thread_id,
+            dispatch_confirmed=True,
+        )
+        if self.recovery.adapter is not None:
+            self.host_adapter = self.recovery.adapter
+            self._runner.replace_adapter(self.host_adapter)
+        if decision.action is RecoveryAction.PRESENT:
+            return self.runtime.canonical_response(request_id)
+        self.display(f"Codex recovery stopped: {decision.rationale}")
+        await self.audio.speak("Codex recovery could not prove a final answer, so I did not retry it.")
+        return None
+
     async def _listen_safely(self) -> str | None:
         try:
             return await self.audio.listen()
         except Exception as error:
             self.display(f"Voice input error: {error}")
             return None
+
+    def close(self) -> None:
+        self._runner.close()
+        self.host_adapter.close()
 
 
 def run_handsfree_broker(
@@ -345,17 +430,28 @@ def run_handsfree_broker(
     codex_thread_id: str | None = None,
     new_thread: bool = False,
 ) -> None:
+    from voice_mode.config import (
+        BROKER_JOURNAL_DIR,
+        BROKER_JOURNAL_INCLUDE_TRANSCRIPT,
+        BROKER_JOURNAL_MAX_BYTES,
+        BROKER_JOURNAL_MAX_FILES,
+    )
+
     if codex_adapter not in {"auto", "app-server", "exec"}:
         raise ValueError(f"unknown Codex adapter: {codex_adapter}")
     resolved_adapter = "app-server" if codex_adapter == "auto" else codex_adapter
     selected_thread_id = None if new_thread else codex_thread_id
-    host_adapter: AppServerHostAdapter | None = None
-    app_runner: AppServerCodexRunner | None = None
+    host_adapter: HostAdapter | None = None
+    recovery_factory = None
 
     if resolved_adapter == "app-server":
-        transport = AppServerTransport.start_process(executable=codex_executable)
+        def connect_app_server() -> AppServerHostAdapter:
+            transport = AppServerTransport.start_process(executable=codex_executable)
+            return AppServerHostAdapter.connect(transport)
+
+        recovery_factory = connect_app_server
         try:
-            host_adapter = AppServerHostAdapter.connect(transport)
+            host_adapter = connect_app_server()
             selection = select_thread(
                 host_adapter,
                 repo_root,
@@ -363,36 +459,55 @@ def run_handsfree_broker(
                 new_thread=new_thread,
             )
             selected_thread_id = selection.thread.thread_id
-            app_runner = AppServerCodexRunner(host_adapter, selected_thread_id)
-        except BaseException:
+        except Exception:
             if host_adapter is not None:
                 host_adapter.close()
-            else:
-                transport.close()
-            raise
+            host_adapter = None
+            recovery_factory = None
+            if codex_adapter != "auto":
+                raise
+            resolved_adapter = "exec"
 
-        def codex_factory(_root: Path):
-            assert app_runner is not None
-            return app_runner
-
-    else:
-        def codex_factory(root: Path) -> CodexAdapter:
-            adapter = CodexAdapter(
-                root,
-                executable=codex_executable,
-                sandbox=codex_sandbox,
-                model=codex_model,
-                reasoning_effort=codex_reasoning_effort,
-            )
-            adapter.thread_id = selected_thread_id
-            return adapter
+    if resolved_adapter == "exec":
+        codex = CodexAdapter(
+            repo_root,
+            executable=codex_executable,
+            sandbox=codex_sandbox,
+            model=codex_model,
+            reasoning_effort=codex_reasoning_effort,
+        )
+        host_adapter = ExecCodexAdapter(codex)
+        if selected_thread_id is not None:
+            host_adapter.attach_thread(selected_thread_id)
+        else:
+            selected_thread_id = EXEC_NEW_THREAD_ID
 
     runtime = None
     server = None
     server_thread = None
     audio = None
+    loop = None
     try:
-        runtime, _dispatcher, server = create_broker(socket_path, audio_enabled=True)
+        assert host_adapter is not None and selected_thread_id is not None
+        journal = TurnJournal(
+            BROKER_JOURNAL_DIR,
+            f"{resolved_adapter}:{selected_thread_id}:{Path(repo_root).resolve()}",
+            include_transcript=BROKER_JOURNAL_INCLUDE_TRANSCRIPT,
+            max_files=BROKER_JOURNAL_MAX_FILES,
+            max_total_bytes=BROKER_JOURNAL_MAX_BYTES,
+        )
+        runtime, _dispatcher, server = create_broker(
+            socket_path,
+            audio_enabled=True,
+            journal=journal,
+        )
+        recovery = (
+            RecoveryCoordinator(runtime, journal, recovery_factory)
+            if recovery_factory is not None
+            else None
+        )
+        if recovery is not None:
+            recovery.adapter = host_adapter
         server.start()
         server_thread = threading.Thread(
             target=server.serve_forever,
@@ -413,12 +528,14 @@ def run_handsfree_broker(
             runtime=runtime,
             audio=audio,
             wake_phrase=wake_phrase,
-            codex_factory=codex_factory,
-            initial_thread_id=selected_thread_id,
-            adapter_kind=resolved_adapter,
+            host_adapter=host_adapter,
+            thread_id=selected_thread_id,
+            recovery=recovery,
         )
         asyncio.run(loop.run())
     finally:
+        if loop is not None:
+            loop.close()
         if audio is not None:
             audio.close()
         if runtime is not None:
@@ -427,7 +544,5 @@ def run_handsfree_broker(
             server.stop()
         if server_thread is not None:
             server_thread.join(timeout=2)
-        if app_runner is not None:
-            app_runner.close()
         if host_adapter is not None:
             host_adapter.close()

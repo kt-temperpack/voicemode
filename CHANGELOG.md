@@ -10,8 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Hands-free Codex conversation broker** — `voicemode broker run` now stays in
-  a local microphone loop, wakes on `Computer`, drives one resumable `codex
-  exec` thread per foreground session, prints complete answers, and speaks
+  a local microphone loop, wakes on `Computer`, attaches to one exact Codex
+  app-server thread per foreground session, prints complete answers, and speaks
   concise summaries with the local `am_michael` voice. Follow-ups reuse the
   same Codex context until silence or `go to sleep`; `exit voice mode` and the
   existing status/stop socket provide clean shutdown, while `--daemon-only`
@@ -37,10 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Broker cues omit the global Bluetooth silence padding, keeping wake
   acknowledgment to about 200 ms so request capture opens before the user
   starts speaking.
-  Broker speech now defaults to 1.35x speed, and brief acknowledgments such as
+  Broker speech now defaults to 1.25x speed, and brief acknowledgments such as
   `nice` or `thanks` close the follow-up window without generating an extra
   Codex response. End-of-speech detection now tolerates isolated VAD noise in
   the trailing silence window instead of waiting until the full listen timeout.
+  Host dispatch is journaled before submission, app-server disconnects recover
+  by correlating the original request instead of replaying it, and the exec
+  fallback is labeled as a separate Codex child before listening begins.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

@@ -329,8 +329,14 @@ class BrokerDispatcher:
         raise BrokerError(BrokerErrorCode.UNKNOWN_OPERATION, "unknown operation")
 
 
-def create_broker(socket_path: Path | None = None, *, event_sink=None, audio_enabled: bool = False):
-    runtime = BrokerRuntime(event_sink=event_sink)
+def create_broker(
+    socket_path: Path | None = None,
+    *,
+    event_sink=None,
+    audio_enabled: bool = False,
+    journal=None,
+):
+    runtime = BrokerRuntime(event_sink=event_sink, journal=journal)
     dispatcher = BrokerDispatcher(runtime, audio_enabled=audio_enabled)
     server = BrokerServer(socket_path or BROKER_SOCKET_PATH, dispatcher, event_sink=event_sink)
     dispatcher.stop_callback = server.stop

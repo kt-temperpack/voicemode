@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timezone
 
-from ..codex import CodexAdapter, CodexTurnError
+from ..codex import CodexAdapter
 from ..types import (
     HostCapability,
     HostCompletion,
@@ -99,7 +99,8 @@ class ExecCodexAdapter(HostAdapter):
                     "start_turn",
                     "requested thread differs from the attached exec thread",
                 )
-            self.codex.thread_id = thread_id
+            if thread_id != "exec:new-separate-thread":
+                self.codex.thread_id = thread_id
             host_turn_id = f"exec-{request_id}"
             self._active = (request_id, thread_id, host_turn_id)
             self._dispositions[(request_id, thread_id)] = HostDisposition.IN_PROGRESS
@@ -116,7 +117,7 @@ class ExecCodexAdapter(HostAdapter):
     def _run(self, request_id, thread_id, host_turn_id, prompt):
         try:
             turn = self.codex.run_turn(prompt, request_id=request_id)
-        except CodexTurnError as error:
+        except Exception as error:
             event = HostEvent(
                 HostEventKind.TURN_COMPLETED,
                 request_id,

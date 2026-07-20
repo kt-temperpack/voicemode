@@ -8,18 +8,23 @@ import pytest
 from voice_mode.broker import handsfree as handsfree_module
 from voice_mode.broker import (
     HostApprovalRequest,
+    HostCapability,
     HostCompletion,
     HostEvent,
     HostEventKind,
+    HostProbe,
     HostTurn,
     HostTurnState,
 )
 from voice_mode.broker.handsfree import (
     AppServerCodexRunner,
+    EXEC_NEW_THREAD_ID,
     HandsFreeLoop,
+    HostTransportLost,
     control_intent,
     wake_command,
 )
+from voice_mode.broker.codex import CodexTurn
 from voice_mode.broker.runtime import BrokerRuntime
 
 
@@ -52,7 +57,9 @@ class FakeCodex:
         self.prompts.append(prompt)
         if on_started is not None:
             on_started()
-        return handsfree_module.CodexTurn(
+        if self.thread_id is None:
+            self.thread_id = "codex-1"
+        return CodexTurn(
             display_text=f"full:{prompt}",
             spoken_summary=f"full:{prompt}",
             thread_id=self.thread_id,
@@ -112,6 +119,30 @@ class FakeAppServerAdapter:
         self.calls.append(("interrupt", kwargs))
 
 
+def test_host_runner_surfaces_transport_loss_for_evidence_based_recovery():
+    adapter = FakeAppServerAdapter()
+
+    def lose_transport(**kwargs):
+        adapter.calls.append(("start", kwargs))
+        adapter.sink(
+            HostEvent(
+                HostEventKind.TRANSPORT_LOST,
+                None,
+                None,
+                error="socket closed",
+            )
+        )
+        return HostTurn(
+            kwargs["request_id"], kwargs["thread_id"], "turn-1", HostTurnState.STARTED
+        )
+
+    adapter.start_turn = lose_transport
+    runner = AppServerCodexRunner(adapter, "thread-1", turn_timeout=1)
+
+    with pytest.raises(HostTransportLost, match="socket closed"):
+        runner.run_turn("inspect", request_id="request-1")
+
+
 def test_wake_and_control_parsing_is_strict():
     assert wake_command("Computer, check tests", "Computer") == "check tests"
     assert wake_command("Hey Computer, check tests", "Computer") == "check tests"
@@ -154,15 +185,26 @@ def test_auto_adapter_uses_native_app_server_and_exact_thread(monkeypatch, tmp_p
             calls.append("transport-close")
 
     class FakeHost:
+        def probe(self):
+            return HostProbe(
+                "app-server", True, frozenset({HostCapability.START_TURN})
+            )
+
+        def subscribe(self, _sink):
+            return lambda: None
+
         def close(self):
             calls.append("host-close")
 
-    class FakeRunner:
-        def __init__(self, adapter, thread_id):
-            calls.append(("runner", adapter, thread_id))
+    class FakeLoop:
+        def __init__(self, **kwargs):
+            calls.append(("loop", kwargs))
+
+        async def run(self):
+            return None
 
         def close(self):
-            calls.append("runner-close")
+            calls.append("loop-close")
 
     class FakeServer:
         def start(self):
@@ -205,7 +247,7 @@ def test_auto_adapter_uses_native_app_server_and_exact_thread(monkeypatch, tmp_p
         return SimpleNamespace(thread=SimpleNamespace(thread_id="current-thread"))
 
     monkeypatch.setattr(handsfree_module, "select_thread", fake_select)
-    monkeypatch.setattr(handsfree_module, "AppServerCodexRunner", FakeRunner)
+    monkeypatch.setattr(handsfree_module, "HandsFreeLoop", FakeLoop)
     monkeypatch.setattr(
         handsfree_module,
         "create_broker",
@@ -238,14 +280,17 @@ def test_auto_adapter_uses_native_app_server_and_exact_thread(monkeypatch, tmp_p
 
     selection = next(call for call in calls if isinstance(call, tuple) and call[0] == "select")
     assert selection[3]["explicit_thread_id"] == "current-thread"
-    assert ("runner", host, "current-thread") in calls
-    assert calls[-2:] == ["runner-close", "host-close"]
+    loop_call = next(call for call in calls if isinstance(call, tuple) and call[0] == "loop")
+    assert loop_call[1]["host_adapter"] is host
+    assert loop_call[1]["thread_id"] == "current-thread"
+    assert calls.index("loop-close") < calls.index("host-close")
 
 
 @pytest.mark.asyncio
 async def test_loop_ignores_ambient_then_reuses_codex_for_followup(tmp_path):
     audio = FakeAudio([])
     codex = FakeCodex()
+    codex.thread_id = None
     displayed = []
     runtime = BrokerRuntime()
     loop = HandsFreeLoop(
@@ -253,7 +298,8 @@ async def test_loop_ignores_ambient_then_reuses_codex_for_followup(tmp_path):
         runtime=runtime,
         audio=audio,
         wake_phrase="Computer",
-        codex_factory=lambda _root: codex,
+        host_adapter=handsfree_module.ExecCodexAdapter(codex),
+        thread_id=EXEC_NEW_THREAD_ID,
         display=displayed.append,
     )
 
@@ -297,9 +343,8 @@ async def test_loop_announces_exact_thread_before_first_dispatch(tmp_path):
         runtime=runtime,
         audio=audio,
         wake_phrase="Computer",
-        codex_factory=lambda _root: codex,
-        initial_thread_id="current-thread",
-        adapter_kind="exec",
+        host_adapter=handsfree_module.ExecCodexAdapter(codex),
+        thread_id="current-thread",
         display=displayed.append,
     )
 
@@ -307,8 +352,10 @@ async def test_loop_announces_exact_thread_before_first_dispatch(tmp_path):
 
     adapter_index = displayed.index("Codex adapter: exec")
     thread_index = displayed.index("Codex thread: current-thread")
+    ready_index = displayed.index("Hands-free Codex ready")
     dispatch_index = displayed.index("Codex: working…")
-    assert adapter_index < thread_index < dispatch_index
+    assert adapter_index < thread_index < ready_index < dispatch_index
+    assert any("separate Codex child" in line for line in displayed)
     assert displayed.count("Codex thread: current-thread") == 1
     assert codex.prompts == ["inspect the repo"]
     assert runtime.snapshot().shutting_down is True
@@ -326,7 +373,8 @@ async def test_transcription_failure_does_not_crash_loop(tmp_path):
         runtime=BrokerRuntime(),
         audio=FailingAudio([]),
         wake_phrase="Computer",
-        codex_factory=lambda _root: FakeCodex(),
+        host_adapter=handsfree_module.ExecCodexAdapter(FakeCodex()),
+        thread_id=EXEC_NEW_THREAD_ID,
         display=displayed.append,
     )
 

@@ -726,7 +726,7 @@ BROKER_LONG_POLL_MAX_SECONDS = _bounded_env_number(
 )
 BROKER_WAKE_PHRASE = os.getenv("VOICEMODE_BROKER_WAKE_PHRASE", "Computer").strip() or "Computer"
 BROKER_VOICE = os.getenv("VOICEMODE_BROKER_VOICE", "am_michael").strip() or "am_michael"
-BROKER_VOICE_SPEED = _bounded_env_number("VOICEMODE_BROKER_VOICE_SPEED", 1.35, 0.25, 4.0, float)
+BROKER_VOICE_SPEED = _bounded_env_number("VOICEMODE_BROKER_VOICE_SPEED", 1.25, 0.25, 4.0, float)
 BROKER_LISTEN_DURATION_SECONDS = _bounded_env_number(
     "VOICEMODE_BROKER_LISTEN_DURATION_SECONDS", 30.0, 2.0, 120.0, float
 )

@@ -456,6 +456,18 @@ class BrokerRuntime:
             self._turn = reduction.projection
             return True
 
+    def canonical_response(self, request_id: str) -> CanonicalResponse:
+        """Return the immutable response currently owned by the presenter."""
+
+        with self._condition:
+            response = self._turn.response
+            if response is None or response.request_id != request_id:
+                raise BrokerError(
+                    BrokerErrorCode.INVALID_REQUEST,
+                    "canonical response is not available for this request",
+                )
+            return response
+
     def mark_visible_presented(self, request_id: str) -> bool:
         """Claim visible output immediately before the caller writes it."""
 
