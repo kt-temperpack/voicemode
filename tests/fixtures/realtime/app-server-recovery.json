@@ -1,0 +1,116 @@
+{
+  "cases": [
+    {
+      "fixture_case": "absent",
+      "request_id": "request_fixture_absent",
+      "result": {
+        "thread": {
+          "id": "thread_fixture_0001",
+          "turns": []
+        }
+      }
+    },
+    {
+      "fixture_case": "in_progress",
+      "request_id": "request_fixture_running",
+      "result": {
+        "thread": {
+          "id": "thread_fixture_0001",
+          "turns": [
+            {
+              "id": "turn_fixture_running",
+              "items": [
+                {
+                  "clientUserMessageId": "request_fixture_running",
+                  "type": "userMessage"
+                }
+              ],
+              "status": "inProgress"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "fixture_case": "completed",
+      "request_id": "request_fixture_completed",
+      "result": {
+        "thread": {
+          "id": "thread_fixture_0001",
+          "turns": [
+            {
+              "completedAt": 0,
+              "id": "turn_fixture_completed",
+              "items": [
+                {
+                  "clientUserMessageId": "request_fixture_completed",
+                  "type": "userMessage"
+                },
+                {
+                  "id": "message_fixture_completed",
+                  "text": "[synthetic] recovered completion",
+                  "type": "agentMessage"
+                }
+              ],
+              "status": "completed"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "fixture_case": "cancelled",
+      "request_id": "request_fixture_cancelled",
+      "result": {
+        "thread": {
+          "id": "thread_fixture_0001",
+          "turns": [
+            {
+              "id": "turn_fixture_cancelled",
+              "items": [
+                {
+                  "clientUserMessageId": "request_fixture_cancelled",
+                  "type": "userMessage"
+                }
+              ],
+              "status": "cancelled"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "fixture_case": "ambiguous_duplicate",
+      "request_id": "request_fixture_duplicate",
+      "result": {
+        "thread": {
+          "id": "thread_fixture_0001",
+          "turns": [
+            {
+              "id": "turn_fixture_duplicate_0001",
+              "items": [
+                {
+                  "clientUserMessageId": "request_fixture_duplicate",
+                  "type": "userMessage"
+                }
+              ],
+              "status": "inProgress"
+            },
+            {
+              "id": "turn_fixture_duplicate_0002",
+              "items": [
+                {
+                  "clientUserMessageId": "request_fixture_duplicate",
+                  "type": "userMessage"
+                }
+              ],
+              "status": "inProgress"
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "contract_source": "voice_mode_codex_thread_read_checked_2026-07-20",
+  "schema_version": 1
+}

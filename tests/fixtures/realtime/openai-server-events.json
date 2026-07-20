@@ -1,0 +1,352 @@
+{
+  "contract_source": "official_openai_realtime_checked_2026-07-20",
+  "events": [
+    {
+      "fixture_case": "session_created",
+      "wire": {
+        "event_id": "event_fixture_session_created",
+        "session": {
+          "audio": {
+            "input": {
+              "format": {
+                "rate": 24000,
+                "type": "audio/pcm"
+              },
+              "transcription": {
+                "model": "gpt-4o-mini-transcribe"
+              },
+              "turn_detection": {
+                "create_response": false,
+                "eagerness": "low",
+                "interrupt_response": true,
+                "type": "semantic_vad"
+              }
+            },
+            "output": {
+              "format": {
+                "rate": 24000,
+                "type": "audio/pcm"
+              },
+              "speed": 1.25,
+              "voice": "marin"
+            }
+          },
+          "id": "session_fixture_0001",
+          "model": "gpt-realtime-2.1",
+          "object": "realtime.session",
+          "output_modalities": [
+            "audio"
+          ],
+          "type": "realtime"
+        },
+        "type": "session.created"
+      }
+    },
+    {
+      "fixture_case": "session_updated",
+      "wire": {
+        "event_id": "event_fixture_session_updated",
+        "session": {
+          "audio": {
+            "input": {
+              "transcription": {
+                "model": "gpt-4o-mini-transcribe"
+              },
+              "turn_detection": {
+                "create_response": false,
+                "eagerness": "low",
+                "interrupt_response": true,
+                "type": "semantic_vad"
+              }
+            },
+            "output": {
+              "speed": 1.25,
+              "voice": "marin"
+            }
+          },
+          "id": "session_fixture_0001",
+          "model": "gpt-realtime-2.1",
+          "object": "realtime.session",
+          "output_modalities": [
+            "audio"
+          ],
+          "type": "realtime"
+        },
+        "type": "session.updated"
+      }
+    },
+    {
+      "fixture_case": "speech_started",
+      "wire": {
+        "audio_start_ms": 0,
+        "event_id": "event_fixture_speech_started",
+        "item_id": "item_fixture_user_0001",
+        "type": "input_audio_buffer.speech_started"
+      }
+    },
+    {
+      "fixture_case": "speech_stopped",
+      "wire": {
+        "audio_end_ms": 1200,
+        "event_id": "event_fixture_speech_stopped",
+        "item_id": "item_fixture_user_0001",
+        "type": "input_audio_buffer.speech_stopped"
+      }
+    },
+    {
+      "fixture_case": "audio_committed",
+      "wire": {
+        "event_id": "event_fixture_audio_committed",
+        "item_id": "item_fixture_user_0001",
+        "previous_item_id": null,
+        "type": "input_audio_buffer.committed"
+      }
+    },
+    {
+      "fixture_case": "audio_cleared",
+      "wire": {
+        "event_id": "event_fixture_audio_cleared",
+        "type": "input_audio_buffer.cleared"
+      }
+    },
+    {
+      "fixture_case": "conversation_item_added",
+      "wire": {
+        "event_id": "event_fixture_item_added",
+        "item": {
+          "content": [
+            {
+              "transcript": "[synthetic] delegate the fixture task",
+              "type": "input_audio"
+            }
+          ],
+          "id": "item_fixture_user_0001",
+          "role": "user",
+          "status": "completed",
+          "type": "message"
+        },
+        "previous_item_id": null,
+        "type": "conversation.item.added"
+      }
+    },
+    {
+      "fixture_case": "conversation_item_done",
+      "wire": {
+        "event_id": "event_fixture_item_done",
+        "item": {
+          "content": [
+            {
+              "transcript": "[synthetic] delegate the fixture task",
+              "type": "input_audio"
+            }
+          ],
+          "id": "item_fixture_user_0001",
+          "role": "user",
+          "status": "completed",
+          "type": "message"
+        },
+        "previous_item_id": null,
+        "type": "conversation.item.done"
+      }
+    },
+    {
+      "fixture_case": "conversation_item_created_compatibility",
+      "wire": {
+        "event_id": "event_fixture_item_created",
+        "item": {
+          "content": [
+            {
+              "transcript": "[synthetic] compatibility alias input",
+              "type": "input_audio"
+            }
+          ],
+          "id": "item_fixture_user_compat_0001",
+          "role": "user",
+          "status": "completed",
+          "type": "message"
+        },
+        "previous_item_id": "item_fixture_user_0001",
+        "type": "conversation.item.created"
+      }
+    },
+    {
+      "fixture_case": "input_transcript_delta",
+      "wire": {
+        "content_index": 0,
+        "delta": "[synthetic] delegate",
+        "event_id": "event_fixture_input_transcript_delta",
+        "item_id": "item_fixture_user_0001",
+        "type": "conversation.item.input_audio_transcription.delta"
+      }
+    },
+    {
+      "fixture_case": "input_transcript_completed",
+      "wire": {
+        "content_index": 0,
+        "event_id": "event_fixture_input_transcript_completed",
+        "item_id": "item_fixture_user_0001",
+        "transcript": "[synthetic] delegate the fixture task",
+        "type": "conversation.item.input_audio_transcription.completed"
+      }
+    },
+    {
+      "fixture_case": "response_created",
+      "wire": {
+        "event_id": "event_fixture_response_created",
+        "response": {
+          "id": "response_fixture_0001",
+          "object": "realtime.response",
+          "output": [],
+          "status": "in_progress"
+        },
+        "type": "response.created"
+      }
+    },
+    {
+      "fixture_case": "output_transcript_delta",
+      "wire": {
+        "content_index": 0,
+        "delta": "[synthetic] I can delegate that",
+        "event_id": "event_fixture_output_transcript_delta",
+        "item_id": "item_fixture_assistant_0001",
+        "output_index": 0,
+        "response_id": "response_fixture_0001",
+        "type": "response.output_audio_transcript.delta"
+      }
+    },
+    {
+      "fixture_case": "output_transcript_done",
+      "wire": {
+        "content_index": 0,
+        "event_id": "event_fixture_output_transcript_done",
+        "item_id": "item_fixture_assistant_0001",
+        "output_index": 0,
+        "response_id": "response_fixture_0001",
+        "transcript": "[synthetic] I can delegate that now",
+        "type": "response.output_audio_transcript.done"
+      }
+    },
+    {
+      "fixture_case": "function_call_arguments_done",
+      "wire": {
+        "arguments": "{\"task\":\"[synthetic] inspect the fixture contract\"}",
+        "call_id": "function_call_fixture_0001",
+        "event_id": "event_fixture_function_arguments_done",
+        "item_id": "item_fixture_function_0001",
+        "name": "delegate_codex",
+        "output_index": 0,
+        "response_id": "response_fixture_0001",
+        "type": "response.function_call_arguments.done"
+      }
+    },
+    {
+      "fixture_case": "response_done_completed_function_call",
+      "wire": {
+        "event_id": "event_fixture_response_done_completed",
+        "response": {
+          "id": "response_fixture_0001",
+          "object": "realtime.response",
+          "output": [
+            {
+              "arguments": "{\"task\":\"[synthetic] inspect the fixture contract\"}",
+              "call_id": "function_call_fixture_0001",
+              "id": "item_fixture_function_0001",
+              "name": "delegate_codex",
+              "status": "completed",
+              "type": "function_call"
+            }
+          ],
+          "status": "completed",
+          "status_details": null
+        },
+        "type": "response.done"
+      }
+    },
+    {
+      "fixture_case": "function_output_acknowledged_added",
+      "wire": {
+        "event_id": "event_fixture_function_output_added",
+        "item": {
+          "call_id": "function_call_fixture_0001",
+          "id": "item_fixture_function_output_0001",
+          "output": "{\"job_id\":\"job_fixture_0001\",\"status\":\"accepted\"}",
+          "status": "completed",
+          "type": "function_call_output"
+        },
+        "previous_item_id": "item_fixture_function_0001",
+        "type": "conversation.item.added"
+      }
+    },
+    {
+      "fixture_case": "function_output_acknowledged_done",
+      "wire": {
+        "event_id": "event_fixture_function_output_done",
+        "item": {
+          "call_id": "function_call_fixture_0001",
+          "id": "item_fixture_function_output_0001",
+          "output": "{\"job_id\":\"job_fixture_0001\",\"status\":\"accepted\"}",
+          "status": "completed",
+          "type": "function_call_output"
+        },
+        "previous_item_id": "item_fixture_function_0001",
+        "type": "conversation.item.done"
+      }
+    },
+    {
+      "fixture_case": "response_done_cancelled",
+      "wire": {
+        "event_id": "event_fixture_response_done_cancelled",
+        "response": {
+          "id": "response_fixture_0002",
+          "object": "realtime.response",
+          "output": [],
+          "status": "cancelled",
+          "status_details": {
+            "reason": "[synthetic] client cancellation"
+          }
+        },
+        "type": "response.done"
+      }
+    },
+    {
+      "fixture_case": "rate_limits_updated",
+      "wire": {
+        "event_id": "event_fixture_rate_limits",
+        "rate_limits": [
+          {
+            "limit": 100,
+            "name": "requests",
+            "remaining": 99,
+            "reset_seconds": 1.0
+          }
+        ],
+        "type": "rate_limits.updated"
+      }
+    },
+    {
+      "fixture_case": "structured_error_correlated",
+      "wire": {
+        "error": {
+          "code": "invalid_request_error",
+          "event_id": "client_event_fixture_0001",
+          "message": "[synthetic] rejected fixture event",
+          "param": null,
+          "type": "invalid_request_error"
+        },
+        "event_id": "event_fixture_error_0001",
+        "type": "error"
+      }
+    },
+    {
+      "fixture_case": "unknown_additive_event",
+      "wire": {
+        "event_id": "event_fixture_unknown_0001",
+        "future_field": {
+          "bounded": true
+        },
+        "type": "realtime.fixture_future_event"
+      }
+    }
+  ],
+  "schema_version": 1
+}

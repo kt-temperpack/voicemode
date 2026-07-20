@@ -1,0 +1,95 @@
+{
+  "contract_source": "voice_mode_codex_app_server_adapter_checked_2026-07-20",
+  "events": [
+    {
+      "fixture_case": "turn_started",
+      "wire": {
+        "method": "turn/started",
+        "params": {
+          "threadId": "thread_fixture_0001",
+          "turn": {
+            "id": "turn_fixture_0001",
+            "items": [],
+            "status": "inProgress"
+          }
+        }
+      }
+    },
+    {
+      "fixture_case": "approval_required",
+      "wire": {
+        "id": "approval_fixture_0001",
+        "method": "item/commandExecution/requestApproval",
+        "params": {
+          "itemId": "item_fixture_approval_0001",
+          "reason": "[synthetic] filesystem approval required",
+          "threadId": "thread_fixture_0001",
+          "turnId": "turn_fixture_0001"
+        }
+      }
+    },
+    {
+      "fixture_case": "turn_completed",
+      "wire": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread_fixture_0001",
+          "turn": {
+            "completedAt": 0,
+            "id": "turn_fixture_0001",
+            "items": [
+              {
+                "id": "message_fixture_0001",
+                "text": "[synthetic] worker completed once",
+                "type": "agentMessage"
+              }
+            ],
+            "status": "completed"
+          }
+        }
+      }
+    },
+    {
+      "fixture_case": "turn_failed",
+      "wire": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread_fixture_0002",
+          "turn": {
+            "error": {
+              "message": "[synthetic] terminal agent failure"
+            },
+            "id": "turn_fixture_0002",
+            "items": [],
+            "status": "failed"
+          }
+        }
+      }
+    },
+    {
+      "fixture_case": "turn_interrupted",
+      "wire": {
+        "method": "turn/completed",
+        "params": {
+          "threadId": "thread_fixture_0003",
+          "turn": {
+            "id": "turn_fixture_0003",
+            "items": [],
+            "status": "interrupted"
+          }
+        }
+      }
+    },
+    {
+      "fixture_case": "transport_lost",
+      "local_extension": true,
+      "wire": {
+        "method": "voicemode/transportLost",
+        "params": {
+          "reason": "[synthetic] side channel disconnected"
+        }
+      }
+    }
+  ],
+  "schema_version": 1
+}

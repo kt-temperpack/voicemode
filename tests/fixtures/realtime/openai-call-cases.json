@@ -1,0 +1,59 @@
+{
+  "call_creation": {
+    "endpoint": "https://api.openai.com/v1/realtime/calls",
+    "method": "POST",
+    "multipart_parts": [
+      {
+        "content_type": "application/sdp",
+        "name": "sdp",
+        "value_kind": "synthetic_offer_metadata_only"
+      },
+      {
+        "content_type": "application/json",
+        "name": "session",
+        "value_kind": "canonical_session_json"
+      }
+    ]
+  },
+  "contract_source": "official_openai_realtime_checked_2026-07-20",
+  "hangup_cases": [
+    {
+      "fixture_case": "ended",
+      "status": 200
+    },
+    {
+      "fixture_case": "already_ended",
+      "status": 404
+    }
+  ],
+  "responses": [
+    {
+      "answer_bytes": 256,
+      "content_type": "application/sdp",
+      "fixture_case": "success",
+      "location": "/v1/realtime/calls/rtc_fixture_call_0001",
+      "status": 201
+    },
+    {
+      "answer_bytes": 0,
+      "content_type": "application/sdp",
+      "fixture_case": "missing_location",
+      "status": 201
+    },
+    {
+      "answer_bytes": 256,
+      "content_type": "application/sdp",
+      "fixture_case": "foreign_location",
+      "location": "https://invalid.example/realtime/calls/rtc_fixture_call_0002",
+      "status": 201
+    },
+    {
+      "answer_bytes": 256,
+      "content_type": "application/sdp",
+      "fixture_case": "query_bearing_location",
+      "location": "/v1/realtime/calls/rtc_fixture_call_0003?unexpected=1",
+      "status": 201
+    }
+  ],
+  "schema_version": 1
+}
