@@ -7,6 +7,7 @@ import os
 import warnings
 import subprocess
 import shutil
+import difflib
 import click
 from pathlib import Path
 
@@ -48,8 +49,39 @@ if not os.environ.get('VOICEMODE_DEBUG', '').lower() in ('true', '1', 'yes'):
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
+class HelpfulCommandGroup(click.Group):
+    """Root command group with corrections for common lifecycle mistakes."""
+
+    _CORRECTIONS = {
+        "brocker": "broker",
+        "converse-mode": "broker converse",
+        "conversemode": "broker converse",
+        "daemon": "start",
+    }
+
+    def resolve_command(self, ctx, args):
+        try:
+            return super().resolve_command(ctx, args)
+        except click.UsageError as error:
+            if not args:
+                raise
+            attempted = args[0]
+            correction = self._CORRECTIONS.get(attempted)
+            if correction is None:
+                matches = difflib.get_close_matches(
+                    attempted, self.list_commands(ctx), n=1, cutoff=0.72
+                )
+                correction = matches[0] if matches else None
+            if correction is None:
+                raise
+            raise click.UsageError(
+                f"No such command '{attempted}'. Did you mean "
+                f"'voicemode {correction}'?"
+            ) from error
+
+
 # Service management CLI - runs MCP server by default, subcommands override
-@click.group(invoke_without_command=True)
+@click.group(cls=HelpfulCommandGroup, invoke_without_command=True)
 @click.version_option(version=__version__, prog_name="VoiceMode")
 @click.help_option('-h', '--help', help='Show this message and exit')
 @click.option('--debug', is_flag=True, help='Enable debug mode and show all warnings')
@@ -61,6 +93,9 @@ def voice_mode_main_cli(ctx, debug, tools_enabled, tools_disabled):
 
     Without arguments, starts the MCP server.
     With subcommands, executes service management operations.
+
+    Use `voicemode start` for persistent hands-free conversation. Use
+    `voicemode stop` or `voicemode restart` to control the user service.
     """
     if debug:
         # Re-enable warnings if debug flag is set
@@ -1558,6 +1593,7 @@ from voice_mode.cli_commands import soundfonts as soundfonts_cmd
 from voice_mode.cli_commands import autofocus as autofocus_cmd
 from voice_mode.cli_commands import conch as conch_cmd
 from voice_mode.cli_commands import broker as broker_cmd
+from voice_mode.cli_commands import lifecycle as lifecycle_cmd
 
 # Add exchanges to main CLI
 voice_mode_main_cli.add_command(exchanges_cmd.exchanges)
@@ -1578,6 +1614,11 @@ voice_mode_main_cli.add_command(conch_cmd.conch)
 
 # Experimental long-lived conversation broker lifecycle.
 voice_mode_main_cli.add_command(broker_cmd.broker)
+
+# Canonical supervised hands-free lifecycle.
+voice_mode_main_cli.add_command(lifecycle_cmd.start)
+voice_mode_main_cli.add_command(lifecycle_cmd.stop)
+voice_mode_main_cli.add_command(lifecycle_cmd.restart)
 
 # Add the /mcp self-reconnect command (VM-1727). Lives in a top-level,
 # MCP-independent module so it imports and runs when the voicemode server is

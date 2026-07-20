@@ -68,6 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Broker supervision now installs deterministic launchd or systemd user
   services with restart backoff, stable logs, liveness-based idempotent start,
   and stop semantics that preserve configuration, journals, and user data.
+  Canonical `voicemode start`, `voicemode stop`, and `voicemode restart`
+  commands now control that service with deterministic human and JSON output,
+  stable exit categories, and exact corrections for common command mistakes;
+  the lower-level `voicemode broker` commands remain available for diagnostics.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

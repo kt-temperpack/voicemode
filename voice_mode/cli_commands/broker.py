@@ -29,10 +29,16 @@ from voice_mode.config import (
 )
 
 
-@click.group(name="broker")
+@click.group(
+    name="broker",
+    epilog=(
+        "For everyday supervised use, prefer `voicemode start`, "
+        "`voicemode stop`, and `voicemode restart`."
+    ),
+)
 @click.help_option("-h", "--help", help="Show this message and exit")
 def broker():
-    """Run and inspect the experimental local conversation broker."""
+    """Run and inspect the local conversation broker."""
 
 
 def _socket_option(function):
