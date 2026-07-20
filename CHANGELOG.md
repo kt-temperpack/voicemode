@@ -55,6 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Optional global and foreground terminal push-to-talk controls bypass wake-word
   uncertainty, with release acting as an exact endpoint and startup conflicts
   naming the precise `--hotkey` or environment setting to change.
+  Push-to-talk now cancels active speech before opening capture, records the
+  cancellation latency, interrupts only the correlated Codex request when the
+  adapter supports it, and otherwise preserves one redirected utterance for the
+  next safe turn without replaying old audio.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

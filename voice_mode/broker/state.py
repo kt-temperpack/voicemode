@@ -32,6 +32,7 @@ _TRANSITIONS: dict[tuple[BrokerPhase, BrokerEvent], BrokerPhase] = {
     (BrokerPhase.THINKING, BrokerEvent.SUMMARY_ACCEPTED): BrokerPhase.SPEAKING,
     (BrokerPhase.SPEAKING, BrokerEvent.PLAYBACK_FINISHED): BrokerPhase.ENGAGED,
     (BrokerPhase.SPEAKING, BrokerEvent.BARGE_IN): BrokerPhase.LISTENING,
+    (BrokerPhase.THINKING, BrokerEvent.BARGE_IN): BrokerPhase.LISTENING,
     (BrokerPhase.ENGAGED, BrokerEvent.FOLLOWUP_EXPIRED): BrokerPhase.ASLEEP,
     (BrokerPhase.ASLEEP, BrokerEvent.RESET): BrokerPhase.ASLEEP,
 }

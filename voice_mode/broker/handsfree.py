@@ -21,6 +21,7 @@ from .activation import (
     reduce_activation,
 )
 from .codex import CodexAdapter, CodexTurnError
+from .barge_in import BargeInCoordinator
 from .hosts import (
     AppServerHostAdapter,
     AppServerTransport,
@@ -169,6 +170,11 @@ class HostTurnRunner:
             prompt=prompt,
         )
 
+    def steer_request(self, request_id: str, prompt: str) -> None:
+        if self._active_request_id != request_id or self._active_turn_id is None:
+            raise CodexTurnError("Codex has no matching active turn to steer")
+        self.steer(prompt)
+
     def interrupt(self) -> None:
         if self._active_turn_id is None:
             return
@@ -177,6 +183,11 @@ class HostTurnRunner:
             thread_id=self.thread_id,
             host_turn_id=self._active_turn_id,
         )
+
+    def interrupt_request(self, request_id: str) -> None:
+        if self._active_request_id != request_id or self._active_turn_id is None:
+            raise CodexTurnError("Codex has no matching active turn to interrupt")
+        self.interrupt()
 
     def close(self) -> None:
         self._unsubscribe()
@@ -250,6 +261,14 @@ class HandsFreeLoop:
         )
         self._activation_lock = threading.Lock()
         self._activation_state = ActivationState()
+        self._barge_in = BargeInCoordinator(
+            runtime=runtime,
+            audio=audio,
+            host_probe=self.host_probe,
+            interrupt_host=self._runner.interrupt_request,
+            steer_host=self._runner.steer_request,
+            result_sink=self._show_barge_result,
+        )
         self._activation_unsubscribe = (
             activation_bus.subscribe(self._on_activation)
             if activation_bus is not None
@@ -262,9 +281,34 @@ class HandsFreeLoop:
             self._activation_state = reduce_activation(previous, event)
             current = self._activation_state
         if event.kind is ActivationKind.PUSH_TO_TALK_PRESS:
+            cancelled, latency_ms = self._barge_in.cancel_audio(event.timestamp)
             self.audio.begin_push_to_talk()
+            self._barge_in.activate(
+                activated_at=event.timestamp,
+                playback_cancelled=cancelled,
+                cancellation_latency_ms=latency_ms,
+            )
+        elif event.kind is ActivationKind.INTERRUPT:
+            self._barge_in.activate(activated_at=event.timestamp)
         if current.endpoint_requested and not previous.endpoint_requested:
             self.audio.release_push_to_talk()
+
+    def _show_barge_result(self, result) -> None:
+        if result.playback_cancelled or result.request_id is not None:
+            self.display(
+                "Interruption: "
+                f"{result.action.value} in {result.cancellation_latency_ms:.1f} ms; "
+                f"{result.rationale}"
+            )
+
+    async def _capture_redirect(self, request_id: str) -> str | None:
+        pending = await self._listen_safely()
+        self._consume_direct_capture()
+        self._barge_in.finish(request_id)
+        if pending:
+            await self.audio.cue_submitted()
+            self.display(f"You: {pending}")
+        return pending
 
     def _consume_direct_capture(self) -> bool:
         with self._activation_lock:
@@ -379,6 +423,13 @@ class HandsFreeLoop:
                     pending = None
                     continue
             except CodexTurnError as error:
+                if self._barge_in.host_was_interrupted(envelope.request_id):
+                    pending = await self._capture_redirect(envelope.request_id)
+                    if pending:
+                        continue
+                    self._close_session(session_id)
+                    session_id = None
+                    continue
                 self.runtime.mark_dispatch_uncertain(envelope.request_id)
                 self.display(f"Codex error: {error}")
                 self._close_session(session_id)
@@ -390,6 +441,14 @@ class HandsFreeLoop:
             if self.runtime.snapshot().shutting_down:
                 return
 
+            if self._barge_in.host_was_interrupted(envelope.request_id):
+                pending = await self._capture_redirect(envelope.request_id)
+                if pending:
+                    continue
+                self._close_session(session_id)
+                session_id = None
+                continue
+
             self.thread_id = response.thread_id
             self._runner.thread_id = response.thread_id
             self.runtime.attach_codex_thread(session_id, response.thread_id)
@@ -398,13 +457,26 @@ class HandsFreeLoop:
                 self.display(f"Codex thread: {response.thread_id}")
                 self.display(f"Open it later: codex resume {response.thread_id}")
             self.runtime.confirm_dispatch(envelope.request_id)
-            self.runtime.accept_summary(session_id, response.spoken_text)
-            await self._presenter.present(response)
-            await self.audio.cue_listening()
+            redirected = self._barge_in.redirect_pending(envelope.request_id)
+            if redirected:
+                self._presenter.show_final(response)
+                if self.runtime.mark_tts_started(envelope.request_id):
+                    self.runtime.finish_tts(envelope.request_id, failed=True)
+            else:
+                self.runtime.accept_summary(session_id, response.spoken_text)
+                await self._presenter.present(response)
+                redirected = self._barge_in.redirect_pending(envelope.request_id)
+            if not redirected:
+                await self.audio.cue_listening()
             pending = await self._listen_safely()
+            if redirected:
+                self._consume_direct_capture()
             if self.runtime.snapshot().shutting_down:
                 return
-            self.runtime.finish_playback(session_id)
+            if redirected:
+                self._barge_in.finish(envelope.request_id)
+            else:
+                self.runtime.finish_playback(session_id)
             if not pending:
                 self._close_session(session_id)
                 session_id = None
@@ -412,7 +484,8 @@ class HandsFreeLoop:
                 continue
             await self.audio.cue_submitted()
             self.display(f"You: {pending}")
-            self.runtime.start_listening(session_id)
+            if not redirected:
+                self.runtime.start_listening(session_id)
 
         self._close_session(session_id)
 

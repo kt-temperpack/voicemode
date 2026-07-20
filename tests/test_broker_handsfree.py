@@ -53,6 +53,10 @@ class FakeAudio:
     def release_push_to_talk(self):
         self.cues.append("ptt-release")
 
+    def cancel_playback(self):
+        self.cues.append("playback-cancel")
+        return False
+
 
 class FakeCodex:
     thread_id = "codex-1"
@@ -401,7 +405,61 @@ async def test_push_to_talk_bypasses_wake_phrase_without_touching_codex_adapter(
     await loop.run()
 
     assert codex.prompts == ["inspect directly"]
-    assert audio.cues[:2] == ["ptt-press", "ptt-release"]
+    assert audio.cues[:3] == ["playback-cancel", "ptt-press", "ptt-release"]
+
+
+@pytest.mark.asyncio
+async def test_tts_barge_in_never_replays_audio_or_dispatches_redirect_twice(tmp_path):
+    bus = ActivationBus()
+
+    class InterruptingAudio(FakeAudio):
+        interrupted = False
+
+        async def speak(self, message):
+            self.spoken.append(message)
+            if message == "full:first request" and not self.interrupted:
+                self.interrupted = True
+                bus.publish(
+                    ActivationEvent.now(
+                        ActivationKind.PUSH_TO_TALK_PRESS, "test-hotkey"
+                    )
+                )
+                bus.publish(
+                    ActivationEvent.now(
+                        ActivationKind.PUSH_TO_TALK_RELEASE, "test-hotkey"
+                    )
+                )
+
+        def cancel_playback(self):
+            self.cues.append("playback-cancel")
+            return True
+
+    audio = InterruptingAudio(
+        [
+            "Computer, first request",
+            "redirected request",
+            "nice",
+            "Computer, exit voice mode",
+        ]
+    )
+    codex = FakeCodex()
+    codex.thread_id = "current-thread"
+    loop = HandsFreeLoop(
+        repo_root=tmp_path,
+        runtime=BrokerRuntime(),
+        audio=audio,
+        wake_phrase="Computer",
+        host_adapter=handsfree_module.ExecCodexAdapter(codex),
+        thread_id="current-thread",
+        activation_bus=bus,
+        display=lambda _message: None,
+    )
+
+    await loop.run()
+
+    assert codex.prompts == ["first request", "redirected request"]
+    assert audio.spoken.count("full:first request") == 1
+    assert audio.cues.count("playback-cancel") == 1
 
 
 @pytest.mark.asyncio

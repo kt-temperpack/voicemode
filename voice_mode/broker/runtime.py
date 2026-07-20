@@ -550,6 +550,24 @@ class BrokerRuntime:
             self._turn = TurnProjection()
             return True
 
+    def cancel_turn(self, request_id: str) -> bool:
+        """Record confirmed cancellation only for the exact active request."""
+
+        with self._condition:
+            envelope = self._turn.envelope
+            if envelope is None or envelope.request_id != request_id:
+                return False
+            if self._turn.state is TurnState.CANCELLED:
+                return False
+            reduction = reduce_turn(self._turn, TurnEvent(TurnEventKind.CANCELLED))
+            cancelled = reduction.projection.envelope
+            assert cancelled is not None
+            self._append_turn_event("turn_cancelled", cancelled)
+            self._recovered_dispatches[request_id] = DispatchDisposition.CANCELLED
+            self._turn = reduction.projection
+            self._condition.notify_all()
+            return True
+
     def turn_diagnostic(self) -> dict:
         """Return privacy-safe, protocol-ready identity for the active turn."""
 

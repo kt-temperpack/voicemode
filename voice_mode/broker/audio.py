@@ -163,6 +163,7 @@ class PersistentVoiceAudio:
         )
         self._muted = self._session.muted
         self._push_to_talk_release = threading.Event()
+        self._push_to_talk_active = threading.Event()
 
     def _create_stream(self, **kwargs):
         if self._stream_factory is None:
@@ -195,7 +196,11 @@ class PersistentVoiceAudio:
         self._session.reopen()
 
     def begin_push_to_talk(self) -> None:
+        self.start()
+        self._drain()
         self._push_to_talk_release.clear()
+        self._push_to_talk_active.set()
+        self._session.unmute()
 
     def release_push_to_talk(self) -> None:
         self._push_to_talk_release.set()
@@ -216,7 +221,8 @@ class PersistentVoiceAudio:
 
     def _capture_utterance(self) -> np.ndarray | None:
         self.start()
-        self._drain()
+        if not self._push_to_talk_active.is_set():
+            self._drain()
         vad = self._vad()
         pre_roll = deque(maxlen=max(1, int(500 / VAD_CHUNK_DURATION_MS)))
         chunks: list[np.ndarray] = []
@@ -295,6 +301,7 @@ class PersistentVoiceAudio:
         finally:
             self._muted.set()
             self._push_to_talk_release.clear()
+            self._push_to_talk_active.clear()
             self._drain()
         if not speech_started or not chunks:
             return None
@@ -302,8 +309,9 @@ class PersistentVoiceAudio:
 
     async def listen(self) -> str | None:
         self.start()
-        self._muted.set()
-        self._drain()
+        if not self._push_to_talk_active.is_set():
+            self._muted.set()
+            self._drain()
         audio = await asyncio.to_thread(self._capture_utterance)
         if audio is None:
             return None
