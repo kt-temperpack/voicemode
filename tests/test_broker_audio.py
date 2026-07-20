@@ -2,7 +2,13 @@ import numpy as np
 import pytest
 
 from voice_mode.broker import audio as audio_module
-from voice_mode.broker.audio import PersistentVoiceAudio, _clean_transcript, _speak_local
+from voice_mode.broker.audio import (
+    PersistentVoiceAudio,
+    _clean_transcript,
+    _play_listening_cue,
+    _play_submitted_cue,
+    _speak_local,
+)
 
 
 class FakeStream:
@@ -51,6 +57,27 @@ async def test_local_speech_synthesizes_then_plays_exactly_once(monkeypatch):
     assert events == [
         ("synthesize", "one answer", "am_michael"),
         ("play", pytest.approx([0.1]), 24000, True),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_broker_cues_have_no_padding(monkeypatch):
+    from voice_mode import core
+
+    calls = []
+
+    async def cue(**kwargs):
+        calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(core, "play_chime_start", cue)
+    monkeypatch.setattr(core, "play_chime_end", cue)
+
+    assert await _play_listening_cue()
+    assert await _play_submitted_cue()
+    assert calls == [
+        {"leading_silence": 0, "trailing_silence": 0},
+        {"leading_silence": 0, "trailing_silence": 0},
     ]
 
 

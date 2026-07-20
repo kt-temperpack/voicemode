@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window, plays distinct listening-active and prompt-submitted cues, keeps
   wake-listener transcription local-only, and prints the full Codex thread ID
   with its `codex resume` command after the first turn. The hands-free Codex
-  lane defaults to `gpt-5.6-terra` with low reasoning and a 1.4 second end-of-speech
+  lane defaults to `gpt-5.6-terra` with low reasoning and a 900 ms end-of-speech
   threshold for faster conversational turns, and transient local STT failures
   no longer terminate the broker process. Cue playback follows conversation
   state: a rising tone acknowledges a standalone wake phrase and a falling tone
@@ -34,6 +34,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Wake parsing now normalizes Unicode punctuation and zero-width prefixes, and
   the terminal confirms both wake acceptance and Codex submission so a dropped
   transition is immediately visible.
+  Broker cues omit the global Bluetooth silence padding, keeping wake
+  acknowledgment to about 200 ms so request capture opens before the user
+  starts speaking.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

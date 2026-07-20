@@ -43,7 +43,7 @@ and `--listen-duration` to override the everyday defaults.
 Hands-free turns default to `gpt-5.6-terra` with low reasoning so conversational
 responses don't inherit a slower interactive Codex profile. Override that lane
 with `VOICEMODE_BROKER_CODEX_MODEL` and
-`VOICEMODE_BROKER_CODEX_REASONING_EFFORT`. The broker uses a 1.4 second
+`VOICEMODE_BROKER_CODEX_REASONING_EFFORT`. The broker uses a 900 ms
 end-of-speech threshold, configurable with
 `VOICEMODE_BROKER_SILENCE_THRESHOLD_MS`.
 

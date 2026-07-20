@@ -85,13 +85,13 @@ async def _transcribe_local(audio: np.ndarray) -> str | None:
 async def _play_submitted_cue() -> bool:
     from voice_mode.core import play_chime_end
 
-    return await play_chime_end()
+    return await play_chime_end(leading_silence=0, trailing_silence=0)
 
 
 async def _play_listening_cue() -> bool:
     from voice_mode.core import play_chime_start
 
-    return await play_chime_start()
+    return await play_chime_start(leading_silence=0, trailing_silence=0)
 
 
 class PersistentVoiceAudio:
@@ -110,7 +110,7 @@ class PersistentVoiceAudio:
         listening_cue_callable: CueCallable = _play_listening_cue,
         submitted_cue_callable: CueCallable = _play_submitted_cue,
         cues_enabled: bool = AUDIO_FEEDBACK_ENABLED,
-        silence_threshold_ms: int = 650,
+        silence_threshold_ms: int = 900,
     ) -> None:
         self.voice = voice
         self.listen_duration = listen_duration
