@@ -7,11 +7,10 @@ thread, prints the complete answer, and speaks a separate one- or two-sentence
 summary. Follow-up speech stays in the same Codex thread until silence or an
 explicit sleep phrase closes the window.
 
-A rising chime means listening is active. It plays once and remains silent when
-an empty listen window rearms. A falling chime plays only after a real utterance
-is transcribed and submitted; blank audio produces no cue. The microphone
-remains open between cues and is muted in software when VoiceMode is not listening. Set
-`VOICEMODE_AUDIO_FEEDBACK=false` to disable both cues.
+The microphone is always listening while the broker is ready, so it does not
+play a start tone. One falling confirmation tone plays only after a real
+utterance is transcribed and submitted; idle windows and blank audio stay
+silent. Set `VOICEMODE_AUDIO_FEEDBACK=false` to disable the confirmation cue.
 
 ## Run and inspect it
 
@@ -35,7 +34,7 @@ and `--listen-duration` to override the everyday defaults.
 Hands-free turns default to `gpt-5.6-terra` with low reasoning so conversational
 responses don't inherit a slower interactive Codex profile. Override that lane
 with `VOICEMODE_BROKER_CODEX_MODEL` and
-`VOICEMODE_BROKER_CODEX_REASONING_EFFORT`. The broker also uses a 650 ms
+`VOICEMODE_BROKER_CODEX_REASONING_EFFORT`. The broker uses a 1.4 second
 end-of-speech threshold, configurable with
 `VOICEMODE_BROKER_SILENCE_THRESHOLD_MS`.
 

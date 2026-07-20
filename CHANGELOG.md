@@ -20,11 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window, plays distinct listening-active and prompt-submitted cues, keeps
   wake-listener transcription local-only, and prints the full Codex thread ID
   with its `codex resume` command after the first turn. The hands-free Codex
-  lane defaults to `gpt-5.6-terra` with low reasoning and a 650 ms end-of-speech
+  lane defaults to `gpt-5.6-terra` with low reasoning and a 1.4 second end-of-speech
   threshold for faster conversational turns, and transient local STT failures
-  no longer terminate the broker process. Listening cues are edge-triggered,
-  so empty timeout windows and blank-audio transcripts no longer produce a
-  repeating on/off chime cycle.
+  no longer terminate the broker process. The always-listening broker uses one
+  confirmation tone after a real transcript; start tones, empty timeout
+  windows, and blank-audio transcripts stay silent so cues cannot interrupt a
+  prompt in progress.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

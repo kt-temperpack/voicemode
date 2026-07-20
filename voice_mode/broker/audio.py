@@ -76,12 +76,6 @@ async def _transcribe_local(audio: np.ndarray) -> str | None:
     return _clean_transcript(text)
 
 
-async def _play_listening_cue() -> bool:
-    from voice_mode.core import play_chime_start
-
-    return await play_chime_start()
-
-
 async def _play_submitted_cue() -> bool:
     from voice_mode.core import play_chime_end
 
@@ -101,7 +95,6 @@ class PersistentVoiceAudio:
         vad_factory=None,
         speak_callable: SpeakCallable = _speak_local,
         transcribe_callable: TranscribeCallable = _transcribe_local,
-        listening_cue_callable: CueCallable = _play_listening_cue,
         submitted_cue_callable: CueCallable = _play_submitted_cue,
         cues_enabled: bool = AUDIO_FEEDBACK_ENABLED,
         silence_threshold_ms: int = 650,
@@ -113,11 +106,9 @@ class PersistentVoiceAudio:
         self._vad_factory = vad_factory
         self._speak_callable = speak_callable
         self._transcribe_callable = transcribe_callable
-        self._listening_cue_callable = listening_cue_callable
         self._submitted_cue_callable = submitted_cue_callable
         self._cues_enabled = cues_enabled
         self._silence_threshold_ms = silence_threshold_ms
-        self._listening_announced = False
         self._queue: queue.Queue[np.ndarray] = queue.Queue()
         self._muted = threading.Event()
         self._muted.set()
@@ -219,9 +210,6 @@ class PersistentVoiceAudio:
         self.start()
         self._muted.set()
         self._drain()
-        if self._cues_enabled and not self._listening_announced:
-            await self._listening_cue_callable()
-            self._listening_announced = True
         audio = await asyncio.to_thread(self._capture_utterance)
         if audio is None:
             return None
@@ -230,7 +218,6 @@ class PersistentVoiceAudio:
             return None
         if self._cues_enabled:
             await self._submitted_cue_callable()
-        self._listening_announced = False
         return transcript
 
     async def speak(self, message: str) -> None:
@@ -239,7 +226,6 @@ class PersistentVoiceAudio:
         self._drain()
         await self._speak_callable(message, self.voice)
         self._drain()
-        self._listening_announced = False
 
     async def exchange(self, message: str) -> str | None:
         await self.speak(message)
