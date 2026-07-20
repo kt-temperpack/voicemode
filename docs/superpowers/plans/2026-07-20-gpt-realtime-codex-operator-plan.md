@@ -820,7 +820,7 @@ hands-free runner.
 **Files:**
 
 - `voice_mode/broker/realtime/jobs.py` (new)
-- `tests/fakes/__init__.py` (new if absent)
+- `tests/fakes/__init__.py` (new)
 - `tests/fakes/realtime.py` (new)
 - `tests/test_broker_realtime_jobs.py` (new)
 
