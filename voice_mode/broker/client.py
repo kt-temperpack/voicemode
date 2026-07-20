@@ -11,7 +11,7 @@ from typing import Callable
 
 from voice_mode.config import BROKER_READ_TIMEOUT_SECONDS, BROKER_SOCKET_PATH
 
-from .protocol import PROTOCOL_VERSION
+from .protocol import PROTOCOL_VERSION, SUPPORTED_PROTOCOL_VERSIONS
 from .types import BrokerError, BrokerErrorCode
 
 
@@ -28,15 +28,24 @@ class BrokerClient:
         connect_timeout: float = 2.0,
         read_timeout: float = BROKER_READ_TIMEOUT_SECONDS,
         request_id_factory: Callable[[], object] = uuid.uuid4,
+        protocol_version: int = PROTOCOL_VERSION,
     ) -> None:
         self.socket_path = Path(socket_path)
         self.connect_timeout = connect_timeout
         self.read_timeout = read_timeout
         self.request_id_factory = request_id_factory
+        if protocol_version not in SUPPORTED_PROTOCOL_VERSIONS:
+            raise ValueError("protocol_version must be 1 or 2")
+        self.protocol_version = protocol_version
 
     def _request(self, operation: str, payload: dict, *, wait_seconds: float = 0.0) -> dict:
         request_id = str(self.request_id_factory())
-        envelope = {"version": 1, "request_id": request_id, "operation": operation, "payload": payload}
+        envelope = {
+            "version": self.protocol_version,
+            "request_id": request_id,
+            "operation": operation,
+            "payload": payload,
+        }
         wire = (json.dumps(envelope, separators=(",", ":")) + "\n").encode()
         conn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
@@ -68,7 +77,7 @@ class BrokerClient:
             response = json.loads(bytes(data).split(b"\n", 1)[0])
         except (UnicodeDecodeError, json.JSONDecodeError, IndexError) as exc:
             raise BrokerError(BrokerErrorCode.INTERNAL_ERROR, "broker returned an invalid response") from exc
-        if not isinstance(response, dict) or response.get("version") != PROTOCOL_VERSION:
+        if not isinstance(response, dict) or response.get("version") != self.protocol_version:
             raise BrokerError(BrokerErrorCode.INTERNAL_ERROR, "broker returned an invalid response")
         if response.get("request_id") != request_id or not isinstance(response.get("ok"), bool):
             raise BrokerError(BrokerErrorCode.INTERNAL_ERROR, "broker returned an invalid response")
@@ -91,8 +100,7 @@ class BrokerClient:
             raise BrokerError(BrokerErrorCode.INTERNAL_ERROR, "broker returned an invalid response") from exc
         raise BrokerError(code, message, retryable=retryable)
 
-    @staticmethod
-    def _validate_result(operation: str, result: dict) -> dict:
+    def _validate_result(self, operation: str, result: dict) -> dict:
         kind = result.get("kind")
         expected_kinds = {
             "status": {"status"},
@@ -100,6 +108,8 @@ class BrokerClient:
             "turn": {"idle", "utterance"},
             "close": {"closed"},
             "stop": {"stopping"},
+            "diagnostic": {"diagnostic"},
+            "interrupt": {"interrupted"},
         }
         if kind not in expected_kinds.get(operation, set()):
             raise BrokerError(BrokerErrorCode.INTERNAL_ERROR, "broker returned an invalid response")
@@ -110,7 +120,11 @@ class BrokerClient:
             "utterance": {"kind", "utterance_id", "text", "captured_at", "repo_root"},
             "closed": {"kind"},
             "stopping": {"kind"},
+            "diagnostic": {"kind", "turn", "capabilities"},
+            "interrupted": {"kind"},
         }[kind]
+        if kind == "status" and self.protocol_version >= 2:
+            required = required | {"turn", "capabilities"}
         if set(result) != required:
             raise BrokerError(BrokerErrorCode.INTERNAL_ERROR, "broker returned an invalid response")
         if kind == "status":
@@ -120,7 +134,7 @@ class BrokerClient:
                 or not isinstance(result["pending_turns"], int)
                 or isinstance(result["uptime_seconds"], bool)
                 or not isinstance(result["uptime_seconds"], (int, float))
-                or result["protocol_version"] != 1
+                or result["protocol_version"] != self.protocol_version
                 or not isinstance(result["shutting_down"], bool)
             ):
                 raise BrokerError(BrokerErrorCode.INTERNAL_ERROR, "broker returned an invalid response")
@@ -134,7 +148,7 @@ class BrokerClient:
                 raise BrokerError(BrokerErrorCode.INTERNAL_ERROR, "broker returned an invalid response")
             if isinstance(session["age_seconds"], bool) or not isinstance(session["age_seconds"], (int, float)):
                 raise BrokerError(BrokerErrorCode.INTERNAL_ERROR, "broker returned an invalid response")
-        if kind == "session":
+        if kind == "session" and self.protocol_version == 1:
             capabilities = result["capabilities"]
             if (
                 not isinstance(capabilities, dict)
@@ -143,6 +157,35 @@ class BrokerClient:
                 or capabilities["pending_turn_limit"] != 1
                 or not isinstance(capabilities["audio_enabled"], bool)
             ):
+                raise BrokerError(BrokerErrorCode.INTERNAL_ERROR, "broker returned an invalid response")
+        if self.protocol_version >= 2 and kind in {"status", "session", "diagnostic"}:
+            capabilities = result["capabilities"]
+            expected = {
+                "protocol_versions",
+                "operations",
+                "pending_turn_limit",
+                "audio_enabled",
+            }
+            if (
+                not isinstance(capabilities, dict)
+                or set(capabilities) != expected
+                or capabilities["protocol_versions"] != [1, 2]
+                or not isinstance(capabilities["operations"], list)
+                or capabilities["pending_turn_limit"] != 1
+                or not isinstance(capabilities["audio_enabled"], bool)
+            ):
+                raise BrokerError(BrokerErrorCode.INTERNAL_ERROR, "broker returned an invalid response")
+        if self.protocol_version >= 2 and kind in {"status", "diagnostic"}:
+            turn = result["turn"]
+            if not isinstance(turn, dict) or set(turn) != {
+                "request_id",
+                "adapter",
+                "thread_id",
+                "repo_root",
+                "state",
+                "presentation",
+                "last_recoverable_error",
+            }:
                 raise BrokerError(BrokerErrorCode.INTERNAL_ERROR, "broker returned an invalid response")
         return result
 
@@ -164,3 +207,13 @@ class BrokerClient:
 
     def stop(self) -> dict:
         return self._request("stop", {})
+
+    def diagnostic(self) -> dict:
+        if self.protocol_version < 2:
+            raise ValueError("diagnostic requires broker protocol v2")
+        return self._request("diagnostic", {})
+
+    def interrupt(self, session_id: str) -> dict:
+        if self.protocol_version < 2:
+            raise ValueError("interrupt requires broker protocol v2")
+        return self._request("interrupt", {"session_id": session_id})

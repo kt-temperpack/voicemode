@@ -25,6 +25,8 @@ from voice_mode.config import (
 
 from .protocol import (
     CloseRequest,
+    DiagnosticRequest,
+    InterruptRequest,
     OpenRequest,
     ProtocolError,
     ProtocolLimits,
@@ -181,12 +183,14 @@ class BrokerServer:
     def _handle(self, conn: socket.socket) -> None:
         current = threading.current_thread()
         request_id = ""
+        response_version = 1
         monitor_done = threading.Event()
         try:
             conn.settimeout(self.read_timeout)
             raw = self._read_request(conn)
             request = decode_request(raw, self.limits)
             request_id = request.request_id
+            response_version = request.protocol_version
             cancel_event = None
             if isinstance(request, TurnRequest) and request.wait_seconds > 0:
                 cancel_event = threading.Event()
@@ -208,19 +212,27 @@ class BrokerServer:
                 result = dispatch_method(request, cancel_event=cancel_event)
             else:
                 result = self.dispatcher(request)
-            response = encode_success(request_id, result)
+            response = encode_success(request_id, result, version=response_version)
         except ProtocolError as error:
             request_id = error.request_id
             self._emit("BROKER_PROTOCOL_ERROR", error_code=error.code.value, retryable=error.retryable)
-            response = encode_error(error, request_id)
+            response = encode_error(error, request_id, version=response_version)
         except BrokerError as error:
-            response = encode_error(error, request_id)
+            response = encode_error(error, request_id, version=response_version)
         except socket.timeout:
-            response = encode_error(BrokerError(BrokerErrorCode.TIMEOUT, "request timed out", retryable=True), request_id)
+            response = encode_error(
+                BrokerError(BrokerErrorCode.TIMEOUT, "request timed out", retryable=True),
+                request_id,
+                version=response_version,
+            )
         except Exception:
             logger.exception("broker request failed")
             self._emit("BROKER_INTERNAL_ERROR", error_code="internal_error", retryable=False)
-            response = encode_error(BrokerError(BrokerErrorCode.INTERNAL_ERROR, "internal broker error"), request_id)
+            response = encode_error(
+                BrokerError(BrokerErrorCode.INTERNAL_ERROR, "internal broker error"),
+                request_id,
+                version=response_version,
+            )
         try:
             conn.settimeout(self.write_timeout)
             conn.sendall(response)
@@ -258,10 +270,12 @@ class BrokerDispatcher:
         stop_callback: Callable[[], None] | None = None,
         *,
         audio_enabled: bool = False,
+        interrupt_callback: Callable[[], None] | None = None,
     ) -> None:
         self.runtime = runtime
         self.stop_callback = stop_callback
         self.audio_enabled = audio_enabled
+        self.interrupt_callback = interrupt_callback
 
     @staticmethod
     def _session_payload(session, age_seconds: float) -> dict:
@@ -275,30 +289,59 @@ class BrokerDispatcher:
     def __call__(self, request) -> dict:
         return self.dispatch(request)
 
+    def _capabilities(self, protocol_version: int) -> dict:
+        capabilities = BrokerCapabilities(audio_enabled=self.audio_enabled)
+        if protocol_version == 1:
+            return {
+                "protocol_version": capabilities.protocol_version,
+                "pending_turn_limit": capabilities.pending_turn_limit,
+                "audio_enabled": capabilities.audio_enabled,
+            }
+        return {
+            "protocol_versions": [1, 2],
+            "operations": [
+                "status",
+                "diagnostic",
+                "open",
+                "turn",
+                "interrupt",
+                "close",
+                "stop",
+            ],
+            "pending_turn_limit": capabilities.pending_turn_limit,
+            "audio_enabled": capabilities.audio_enabled,
+        }
+
+    def _v2_projection(self) -> dict:
+        return {
+            "turn": self.runtime.turn_diagnostic(),
+            "capabilities": self._capabilities(2),
+        }
+
     def dispatch(self, request, *, cancel_event=None) -> dict:
         if isinstance(request, StatusRequest):
             snap = self.runtime.snapshot()
-            return {
+            result = {
                 "kind": "status",
                 "state": snap.phase.value,
                 "session": self._session_payload(snap.session, snap.session_age_seconds or 0.0) if snap.session else None,
                 "pending_turns": snap.pending_turns,
                 "uptime_seconds": snap.uptime_seconds,
-                "protocol_version": 1,
+                "protocol_version": request.protocol_version,
                 "shutting_down": snap.shutting_down,
             }
+            if request.protocol_version >= 2:
+                result.update(self._v2_projection())
+            return result
+        if isinstance(request, DiagnosticRequest):
+            return {"kind": "diagnostic", **self._v2_projection()}
         if isinstance(request, OpenRequest):
             session = self.runtime.open_session(request.codex_session_id, request.repo_root)
             age = self.runtime.snapshot().session_age_seconds or 0.0
-            capabilities = BrokerCapabilities(audio_enabled=self.audio_enabled)
             return {
                 "kind": "session",
                 "session": self._session_payload(session, age),
-                "capabilities": {
-                    "protocol_version": capabilities.protocol_version,
-                    "pending_turn_limit": capabilities.pending_turn_limit,
-                    "audio_enabled": capabilities.audio_enabled,
-                },
+                "capabilities": self._capabilities(request.protocol_version),
             }
         if isinstance(request, TurnRequest):
             if request.spoken_summary:
@@ -321,6 +364,20 @@ class BrokerDispatcher:
         if isinstance(request, CloseRequest):
             self.runtime.close_session(request.session_id)
             return {"kind": "closed"}
+        if isinstance(request, InterruptRequest):
+            session = self.runtime.snapshot().session
+            if session is None or session.session_id != request.session_id:
+                raise BrokerError(
+                    BrokerErrorCode.SESSION_NOT_FOUND,
+                    "broker session is not open",
+                )
+            if self.interrupt_callback is None:
+                raise BrokerError(
+                    BrokerErrorCode.INVALID_REQUEST,
+                    "host interruption is unavailable; use voicemode broker stop",
+                )
+            self.interrupt_callback()
+            return {"kind": "interrupted"}
         if isinstance(request, StopRequest):
             self.runtime.begin_shutdown()
             if self.stop_callback:

@@ -28,6 +28,10 @@ def live_broker(tmp_path):
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     wait_ready(path)
+    deadline = time.monotonic() + 2
+    while not server.is_running and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert server.is_running
     yield runtime, BrokerClient(path, request_id_factory=lambda: "request-1"), server
     runtime.begin_shutdown()
     server.stop()
@@ -47,6 +51,40 @@ def test_real_round_trip_and_content_redaction(live_broker, tmp_path):
     assert "recognizable secret" not in json.dumps(status)
     assert status["state"] == "thinking"
     assert client.close(session_id) == {"kind": "closed"}
+
+
+def test_v2_identity_interrupt(live_broker, tmp_path):
+    runtime, _client, server = live_broker
+    client = BrokerClient(
+        server.socket_path,
+        request_id_factory=lambda: "request-v2",
+        protocol_version=2,
+    )
+    opened = client.open("thread-v2", str(tmp_path))
+    session_id = opened["session"]["session_id"]
+    runtime.activate(session_id)
+    envelope = runtime.accept_turn(
+        session_id,
+        "private prompt",
+        host_adapter="app-server",
+        host_thread_id="thread-v2",
+    )
+    interrupted = []
+    server.dispatcher.interrupt_callback = lambda: interrupted.append(True)
+
+    status = client.status()
+    assert status["turn"] == {
+        "request_id": envelope.request_id,
+        "adapter": "app-server",
+        "thread_id": "thread-v2",
+        "repo_root": str(tmp_path),
+        "state": "accepted",
+        "presentation": "none",
+        "last_recoverable_error": None,
+    }
+    assert client.diagnostic()["turn"] == status["turn"]
+    assert client.interrupt(session_id) == {"kind": "interrupted"}
+    assert interrupted == [True]
 
 
 def test_stop_is_graceful_and_removes_socket(live_broker):

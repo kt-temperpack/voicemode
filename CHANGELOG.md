@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Host dispatch is journaled before submission, app-server disconnects recover
   by correlating the original request instead of replaying it, and the exec
   fallback is labeled as a separate Codex child before listening begins.
+  Broker protocol v2 adds privacy-safe request, adapter, thread, repository,
+  turn-state, recovery, and capability diagnostics plus a named interrupt
+  operation, while protocol v1 remains byte-compatible for existing clients.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

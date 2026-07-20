@@ -206,6 +206,9 @@ def test_auto_adapter_uses_native_app_server_and_exact_thread(monkeypatch, tmp_p
         def close(self):
             calls.append("loop-close")
 
+        def interrupt(self):
+            calls.append("loop-interrupt")
+
     class FakeServer:
         def start(self):
             calls.append("server-start")
@@ -251,7 +254,11 @@ def test_auto_adapter_uses_native_app_server_and_exact_thread(monkeypatch, tmp_p
     monkeypatch.setattr(
         handsfree_module,
         "create_broker",
-        lambda *_args, **_kwargs: (BrokerRuntime(), None, FakeServer()),
+        lambda *_args, **_kwargs: (
+            BrokerRuntime(),
+            SimpleNamespace(interrupt_callback=None),
+            FakeServer(),
+        ),
     )
     monkeypatch.setattr(handsfree_module, "PersistentVoiceAudio", FakeAudioLifecycle)
 

@@ -66,6 +66,7 @@ class BrokerRuntime:
         self._turn = TurnProjection()
         self._recovered_dispatches = self._recover_dispatches()
         self._dispatch_frozen_reason: str | None = None
+        self._last_recoverable_error: str | None = None
         self._shutting_down = False
 
     def _recover_dispatches(self) -> dict[str, DispatchDisposition]:
@@ -348,6 +349,7 @@ class BrokerRuntime:
     def freeze_dispatch(self, reason: str) -> None:
         with self._condition:
             self._dispatch_frozen_reason = reason[:500]
+            self._last_recoverable_error = self._dispatch_frozen_reason
 
     def resume_dispatch(self) -> None:
         with self._condition:
@@ -542,8 +544,26 @@ class BrokerRuntime:
             assert uncertain is not None
             self._append_turn_event("recovery_uncertain", uncertain)
             self._recovered_dispatches[request_id] = DispatchDisposition.UNCERTAIN
+            self._last_recoverable_error = (
+                "host dispatch outcome is uncertain; the request was not replayed"
+            )
             self._turn = TurnProjection()
             return True
+
+    def turn_diagnostic(self) -> dict:
+        """Return privacy-safe, protocol-ready identity for the active turn."""
+
+        with self._condition:
+            envelope = self._turn.envelope
+            return {
+                "request_id": envelope.request_id if envelope else None,
+                "adapter": envelope.host_adapter if envelope else None,
+                "thread_id": envelope.host_thread_id if envelope else None,
+                "repo_root": envelope.repo_root if envelope else None,
+                "state": self._turn.state.value,
+                "presentation": self._turn.presentation.value,
+                "last_recoverable_error": self._last_recoverable_error,
+            }
 
     def wait_for_turn(
         self,

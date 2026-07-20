@@ -4,6 +4,8 @@ import pytest
 
 from voice_mode.broker.protocol import (
     CloseRequest,
+    DiagnosticRequest,
+    InterruptRequest,
     OpenRequest,
     ProtocolError,
     ProtocolLimits,
@@ -18,8 +20,8 @@ from voice_mode.broker.types import BrokerError, BrokerErrorCode
 from voice_mode.config import _bounded_env_number
 
 
-def wire(operation, payload=None, **overrides):
-    value = {"version": 1, "request_id": "req-1", "operation": operation, "payload": payload or {}}
+def wire(operation, payload=None, *, version=1, **overrides):
+    value = {"version": version, "request_id": "req-1", "operation": operation, "payload": payload or {}}
     value.update(overrides)
     return json.dumps(value).encode()
 
@@ -32,6 +34,9 @@ def wire(operation, payload=None, **overrides):
         (wire("open", {"codex_session_id": "codex-1", "repo_root": "/tmp/repo"}), OpenRequest),
         (wire("turn", {"session_id": "s", "spoken_summary": "done", "wait_seconds": 1}), TurnRequest),
         (wire("close", {"session_id": "s"}), CloseRequest),
+        (wire("status", version=2), StatusRequest),
+        (wire("diagnostic", version=2), DiagnosticRequest),
+        (wire("interrupt", {"session_id": "s"}, version=2), InterruptRequest),
     ],
 )
 def test_valid_operations(raw, kind):
@@ -48,7 +53,7 @@ def test_open_canonicalizes_repo_root(tmp_path):
     [
         (b"no", BrokerErrorCode.INVALID_JSON),
         (b"\xff", BrokerErrorCode.INVALID_JSON),
-        (wire("status", version=2), BrokerErrorCode.UNSUPPORTED_VERSION),
+        (wire("status", version=3), BrokerErrorCode.UNSUPPORTED_VERSION),
         (wire("wat"), BrokerErrorCode.UNKNOWN_OPERATION),
         (wire("status", {"extra": True}), BrokerErrorCode.INVALID_REQUEST),
         (wire("open", {"codex_session_id": "c", "repo_root": "relative"}), BrokerErrorCode.INVALID_REQUEST),
@@ -82,6 +87,29 @@ def test_response_envelopes_are_stable_and_do_not_serialize_exceptions():
     failure = json.loads(encode_error(BrokerError(BrokerErrorCode.QUEUE_FULL, "full", retryable=True), "r"))
     assert failure["error"] == {"code": "queue_full", "message": "full", "retryable": True}
     assert "Traceback" not in json.dumps(failure)
+
+
+def test_v2_response_and_unsupported_version_recovery_are_explicit():
+    success = json.loads(
+        encode_success("r", {"kind": "diagnostic"}, version=2)
+    )
+    assert success["version"] == 2
+
+    with pytest.raises(ProtocolError) as caught:
+        decode_request(wire("status", version=99))
+    failure = json.loads(encode_error(caught.value, caught.value.request_id))
+    assert failure["error"]["code"] == "unsupported_version"
+    assert failure["error"]["recovery_command"] == "voicemode broker status --json"
+
+
+def test_v1_rejects_v2_only_operations():
+    for operation, payload in (
+        ("diagnostic", {}),
+        ("interrupt", {"session_id": "session-1"}),
+    ):
+        with pytest.raises(ProtocolError) as caught:
+            decode_request(wire(operation, payload))
+        assert caught.value.code is BrokerErrorCode.UNKNOWN_OPERATION
 
 
 def test_broker_numeric_configuration_is_clamped(monkeypatch):

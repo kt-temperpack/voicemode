@@ -5,6 +5,8 @@ from pathlib import Path
 
 from voice_mode.broker.codex import CodexAdapter
 from voice_mode.broker.protocol import StatusRequest, decode_request, encode_success
+from voice_mode.broker.runtime import BrokerRuntime
+from voice_mode.broker.server import BrokerDispatcher
 
 
 FIXTURES = Path(__file__).parent / "fixtures" / "broker"
@@ -27,6 +29,20 @@ def test_protocol_v1_status_wire_contract_matches_goldens():
 
     actual = encode_success("request-1", {"kind": "status", "phase": "asleep"})
     assert _canonical_json(json.loads(actual)) == _read("protocol_v1_status_response.json")
+
+
+def test_protocol_v2_status_wire_contract_matches_goldens():
+    request_text = _read("protocol_v2_status_request.json")
+    request = decode_request(request_text.encode())
+    assert isinstance(request, StatusRequest)
+    assert request.protocol_version == 2
+
+    runtime = BrokerRuntime(monotonic=lambda: 0.0)
+    result = BrokerDispatcher(runtime, audio_enabled=True).dispatch(request)
+    actual = encode_success("request-1", result, version=2)
+    assert _canonical_json(json.loads(actual)) == _read(
+        "protocol_v2_status_response.json"
+    )
 
 
 def test_codex_single_response_contract_matches_goldens(tmp_path):

@@ -10,6 +10,8 @@ from typing import Any, Mapping
 from .types import BrokerError, BrokerErrorCode
 
 PROTOCOL_VERSION = 1
+LATEST_PROTOCOL_VERSION = 2
+SUPPORTED_PROTOCOL_VERSIONS = frozenset({PROTOCOL_VERSION, LATEST_PROTOCOL_VERSION})
 MAX_NESTING = 16
 MAX_SUMMARY_CHARS = 4_000
 
@@ -23,6 +25,7 @@ class ProtocolLimits:
 @dataclass(frozen=True)
 class StatusRequest:
     request_id: str
+    protocol_version: int = PROTOCOL_VERSION
 
 
 @dataclass(frozen=True)
@@ -30,6 +33,7 @@ class OpenRequest:
     request_id: str
     codex_session_id: str
     repo_root: str
+    protocol_version: int = PROTOCOL_VERSION
 
 
 @dataclass(frozen=True)
@@ -38,25 +42,50 @@ class TurnRequest:
     session_id: str
     spoken_summary: str
     wait_seconds: float
+    protocol_version: int = PROTOCOL_VERSION
 
 
 @dataclass(frozen=True)
 class CloseRequest:
     request_id: str
     session_id: str
+    protocol_version: int = PROTOCOL_VERSION
 
 
 @dataclass(frozen=True)
 class StopRequest:
     request_id: str
+    protocol_version: int = PROTOCOL_VERSION
 
 
-BrokerRequest = StatusRequest | OpenRequest | TurnRequest | CloseRequest | StopRequest
+@dataclass(frozen=True)
+class DiagnosticRequest:
+    request_id: str
+    protocol_version: int = LATEST_PROTOCOL_VERSION
+
+
+@dataclass(frozen=True)
+class InterruptRequest:
+    request_id: str
+    session_id: str
+    protocol_version: int = LATEST_PROTOCOL_VERSION
+
+
+BrokerRequest = (
+    StatusRequest
+    | OpenRequest
+    | TurnRequest
+    | CloseRequest
+    | StopRequest
+    | DiagnosticRequest
+    | InterruptRequest
+)
 
 
 class ProtocolError(BrokerError):
     def __init__(self, code: BrokerErrorCode, message: str, *, request_id: str = "") -> None:
         self.request_id = request_id
+        self.recovery_command: str | None = None
         super().__init__(code, message)
 
 
@@ -121,8 +150,16 @@ def decode_request(raw: bytes, limits: ProtocolLimits | None = None) -> BrokerRe
     version = value["version"]
     if isinstance(version, bool) or not isinstance(version, int):
         _fail(BrokerErrorCode.INVALID_REQUEST, "version must be an integer", request_id)
-    if version != PROTOCOL_VERSION:
-        _fail(BrokerErrorCode.UNSUPPORTED_VERSION, "unsupported protocol version", request_id)
+    if version not in SUPPORTED_PROTOCOL_VERSIONS:
+        try:
+            _fail(
+                BrokerErrorCode.UNSUPPORTED_VERSION,
+                "unsupported protocol version; use version 1 or 2",
+                request_id,
+            )
+        except ProtocolError as error:
+            error.recovery_command = "voicemode broker status --json"
+            raise
     if not (1 <= len(request_id) <= 128) or not request_id.isprintable():
         _fail(BrokerErrorCode.INVALID_REQUEST, "request_id must be 1-128 printable characters")
     operation = value["operation"]
@@ -134,10 +171,24 @@ def decode_request(raw: bytes, limits: ProtocolLimits | None = None) -> BrokerRe
 
     if operation == "status":
         _exact_fields(payload, set(), request_id)
-        return StatusRequest(request_id)
+        return StatusRequest(request_id, version)
     if operation == "stop":
         _exact_fields(payload, set(), request_id)
-        return StopRequest(request_id)
+        return StopRequest(request_id, version)
+    if operation == "diagnostic":
+        if version < 2:
+            _fail(BrokerErrorCode.UNKNOWN_OPERATION, "unknown operation", request_id)
+        _exact_fields(payload, set(), request_id)
+        return DiagnosticRequest(request_id, version)
+    if operation == "interrupt":
+        if version < 2:
+            _fail(BrokerErrorCode.UNKNOWN_OPERATION, "unknown operation", request_id)
+        _exact_fields(payload, {"session_id"}, request_id)
+        return InterruptRequest(
+            request_id,
+            _bounded_string(payload, "session_id", request_id, max_chars=128),
+            version,
+        )
     if operation == "open":
         _exact_fields(payload, {"codex_session_id", "repo_root"}, request_id)
         codex_id = _bounded_string(payload, "codex_session_id", request_id, max_chars=256)
@@ -145,7 +196,7 @@ def decode_request(raw: bytes, limits: ProtocolLimits | None = None) -> BrokerRe
         path = Path(repo_root).expanduser()
         if not path.is_absolute():
             _fail(BrokerErrorCode.INVALID_REQUEST, "repo_root must be absolute", request_id)
-        return OpenRequest(request_id, codex_id, str(path.resolve(strict=False)))
+        return OpenRequest(request_id, codex_id, str(path.resolve(strict=False)), version)
     if operation == "turn":
         allowed = {"session_id", "spoken_summary", "wait_seconds"}
         unknown = payload.keys() - allowed
@@ -167,19 +218,25 @@ def decode_request(raw: bytes, limits: ProtocolLimits | None = None) -> BrokerRe
             _fail(BrokerErrorCode.INVALID_REQUEST, "wait_seconds must be a number", request_id)
         if wait < 0 or wait > limits.long_poll_max_seconds:
             _fail(BrokerErrorCode.INVALID_REQUEST, "wait_seconds is outside the allowed range", request_id)
-        return TurnRequest(request_id, session_id, summary, float(wait))
+        return TurnRequest(request_id, session_id, summary, float(wait), version)
     if operation == "close":
         _exact_fields(payload, {"session_id"}, request_id)
         return CloseRequest(
             request_id,
             _bounded_string(payload, "session_id", request_id, max_chars=128),
+            version,
         )
     _fail(BrokerErrorCode.UNKNOWN_OPERATION, "unknown operation", request_id)
 
 
-def encode_success(request_id: str, result: Mapping[str, Any]) -> bytes:
+def encode_success(
+    request_id: str,
+    result: Mapping[str, Any],
+    *,
+    version: int = PROTOCOL_VERSION,
+) -> bytes:
     envelope = {
-        "version": PROTOCOL_VERSION,
+        "version": version,
         "request_id": request_id,
         "ok": True,
         "result": dict(result),
@@ -187,15 +244,24 @@ def encode_success(request_id: str, result: Mapping[str, Any]) -> bytes:
     return (json.dumps(envelope, separators=(",", ":"), sort_keys=True) + "\n").encode()
 
 
-def encode_error(error: BrokerError, request_id: str = "") -> bytes:
+def encode_error(
+    error: BrokerError,
+    request_id: str = "",
+    *,
+    version: int = PROTOCOL_VERSION,
+) -> bytes:
+    detail = {
+        "code": error.code.value,
+        "message": error.public_message,
+        "retryable": error.retryable,
+    }
+    recovery_command = getattr(error, "recovery_command", None)
+    if version >= 2 or recovery_command is not None:
+        detail["recovery_command"] = recovery_command
     envelope = {
-        "version": PROTOCOL_VERSION,
+        "version": version,
         "request_id": request_id,
         "ok": False,
-        "error": {
-            "code": error.code.value,
-            "message": error.public_message,
-            "retryable": error.retryable,
-        },
+        "error": detail,
     }
     return (json.dumps(envelope, separators=(",", ":"), sort_keys=True) + "\n").encode()

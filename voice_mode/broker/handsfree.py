@@ -411,6 +411,9 @@ class HandsFreeLoop:
         self._runner.close()
         self.host_adapter.close()
 
+    def interrupt(self) -> None:
+        self._runner.interrupt()
+
 
 def run_handsfree_broker(
     socket_path: Path,
@@ -496,7 +499,7 @@ def run_handsfree_broker(
             max_files=BROKER_JOURNAL_MAX_FILES,
             max_total_bytes=BROKER_JOURNAL_MAX_BYTES,
         )
-        runtime, _dispatcher, server = create_broker(
+        runtime, dispatcher, server = create_broker(
             socket_path,
             audio_enabled=True,
             journal=journal,
@@ -532,6 +535,7 @@ def run_handsfree_broker(
             thread_id=selected_thread_id,
             recovery=recovery,
         )
+        dispatcher.interrupt_callback = loop.interrupt
         asyncio.run(loop.run())
     finally:
         if loop is not None:
