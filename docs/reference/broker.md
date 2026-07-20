@@ -40,7 +40,7 @@ return to wake-only listening, or say `exit voice mode` to stop. The default
 voice is the local `am_michael` voice. Use `--repo`, `--voice`, `--wake-phrase`,
 and `--listen-duration` to override the everyday defaults.
 
-Broker speech defaults to 1.35x speed; override it with
+Broker speech defaults to 1.25x speed; override it with
 `VOICEMODE_BROKER_VOICE_SPEED`. Brief acknowledgments such as `nice`, `thanks`,
 or `got it` close the follow-up window silently instead of creating another
 Codex response.
@@ -101,3 +101,22 @@ Repository-scoped long-term memory and optional wake-model evaluation remain
 later slices; normal Codex session context already persists across follow-ups.
 Wake-listener audio is sent only to a configured local STT endpoint and never
 falls through to cloud STT.
+
+## Latency qualification
+
+Broker audio changes use monotonic boundary observations rather than saved
+recordings. Capture JSONL observations for wake acknowledgment, endpoint delay,
+submission state, host dispatch, playback cancellation, device reopen, and
+first TTS audio, then run:
+
+```bash
+uv run python scripts/benchmark-broker-audio.py --input /tmp/broker-latency.jsonl
+```
+
+The command emits p50, p95, maximum, and environment metadata as JSON and exits
+nonzero when a published budget is missing or regresses. It also performs a
+100-turn synthetic soak that fails if more than one input stream exists or any
+stream remains live. Acoustic barge-in may be marked unsupported for unsafe
+speaker/microphone topologies; in that case the report requires the hotkey
+fallback instead. The complete release matrix is in
+[Broker Hardware Qualification](../maintainers/broker-hardware-matrix.md).

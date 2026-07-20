@@ -109,6 +109,7 @@ nav:
   - Development:
     - Local Development: tutorials/development-setup.md
     - Tool Loading Architecture: reference/tool-loading-architecture.md
+    - Broker Hardware Qualification: maintainers/broker-hardware-matrix.md
     - PR Review Rubric: maintainers/pr-review-rubric.md
   - Troubleshooting:
     - Overview: troubleshooting/index.md
