@@ -11,6 +11,7 @@ from voice_mode.broker import (
     HostEvent,
     HostEventKind,
     HostProbe,
+    HostRecoveryEvidence,
     HostThreadSummary,
     HostTurn,
     HostTurnState,
@@ -159,11 +160,40 @@ class HostAdapterContract:
         assert received == [event]
         assert adapter.closed is True
 
-
 class TestFakeHostAdapter(HostAdapterContract):
     @pytest.fixture
     def adapter(self):
         return FakeHostAdapter()
+
+
+@pytest.mark.parametrize(
+    ("disposition", "expected_rationale"),
+    (
+        (HostDisposition.ABSENT, "the host has no evidence for the broker request ID"),
+        (
+            HostDisposition.IN_PROGRESS,
+            "the host still shows the broker request in progress",
+        ),
+        (
+            HostDisposition.COMPLETED,
+            "the host reports the broker request completed without a canonical response payload",
+        ),
+        (HostDisposition.CANCELLED, "the host has terminal cancellation evidence"),
+        (
+            HostDisposition.UNCERTAIN,
+            "the host evidence is present but not safe to classify",
+        ),
+    ),
+)
+def test_default_recover_request_maps_query_disposition_into_typed_evidence(
+    disposition, expected_rationale
+):
+    adapter = FakeHostAdapter()
+    adapter.dispositions["request-1"] = disposition
+
+    evidence = adapter.recover_request(request_id="request-1", thread_id="thread-1")
+
+    assert evidence == HostRecoveryEvidence(disposition, expected_rationale)
 
 
 @pytest.mark.parametrize("kind", list(HostErrorKind))

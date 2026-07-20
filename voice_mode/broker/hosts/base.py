@@ -11,6 +11,7 @@ from ..types import (
     HostErrorKind,
     HostEvent,
     HostProbe,
+    HostRecoveryEvidence,
     HostThreadSummary,
     HostTurn,
 )
@@ -111,6 +112,26 @@ class HostAdapter(ABC):
     @abstractmethod
     def query_disposition(self, *, request_id: str, thread_id: str) -> HostDisposition:
         """Classify host evidence for recovery without redispatching."""
+
+    def recover_request(
+        self,
+        *,
+        request_id: str,
+        thread_id: str,
+    ) -> HostRecoveryEvidence:
+        """Map bounded disposition evidence into a typed recovery result."""
+
+        disposition = self.query_disposition(request_id=request_id, thread_id=thread_id)
+        rationale = {
+            HostDisposition.ABSENT: "the host has no evidence for the broker request ID",
+            HostDisposition.IN_PROGRESS: "the host still shows the broker request in progress",
+            HostDisposition.COMPLETED: (
+                "the host reports the broker request completed without a canonical response payload"
+            ),
+            HostDisposition.CANCELLED: "the host has terminal cancellation evidence",
+            HostDisposition.UNCERTAIN: "the host evidence is present but not safe to classify",
+        }[disposition]
+        return HostRecoveryEvidence(disposition, rationale)
 
     @abstractmethod
     def close(self) -> None:

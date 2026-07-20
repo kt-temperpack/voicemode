@@ -3,8 +3,10 @@ import pytest
 
 from voice_mode.broker import (
     HostCapability,
+    HostCompletion,
     HostDisposition,
     HostErrorKind,
+    HostRecoveryEvidence,
     HostTurnState,
 )
 from voice_mode.broker.hosts import AppServerHostAdapter, HostAdapterError
@@ -321,3 +323,98 @@ def test_invalid_thread_payload_fails_closed():
     with pytest.raises(HostAdapterError) as caught:
         adapter.read_thread("missing-cwd")
     assert caught.value.kind is HostErrorKind.HOST_REJECTION
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    (
+        ("inProgress", HostDisposition.IN_PROGRESS),
+        ("completed", HostDisposition.COMPLETED),
+        ("interrupted", HostDisposition.CANCELLED),
+        ("cancelled", HostDisposition.CANCELLED),
+        ("canceled", HostDisposition.CANCELLED),
+    ),
+)
+def test_recover_request_reads_thread_history_and_maps_turn_state(status, expected):
+    turn = {
+        "id": "turn-1",
+        "status": status,
+        "items": [
+            {
+                "clientUserMessageId": "request-1",
+                "type": "userMessage",
+            },
+            {
+                "type": "agentMessage",
+                "text": "Synthetic reply",
+            },
+        ],
+    }
+    if status == "completed":
+        turn["completedAt"] = 1_752_892_800
+    adapter, transport = adapter_with({"thread": {"turns": [turn]}})
+
+    evidence = adapter.recover_request(request_id="request-1", thread_id="thread-1")
+
+    assert evidence.disposition is expected
+    assert transport.calls == [
+        ("thread/read", {"threadId": "thread-1", "includeTurns": True}, 10.0)
+    ]
+    if expected is HostDisposition.COMPLETED:
+        assert evidence.completion == HostCompletion(
+            "request-1",
+            "thread-1",
+            "turn-1",
+            "Synthetic reply",
+            "Synthetic reply",
+            evidence.completion.completed_at,
+        )
+    else:
+        assert evidence.completion is None
+
+
+def test_recover_request_reports_absent_when_history_has_no_matching_turn():
+    adapter, _transport = adapter_with(
+        {"thread": {"turns": [{"id": "turn-1", "clientUserMessageId": "request-2"}]}}
+    )
+
+    evidence = adapter.recover_request(request_id="request-1", thread_id="thread-1")
+
+    assert evidence == HostRecoveryEvidence(
+        HostDisposition.ABSENT,
+        "thread history contains no turn for the broker request ID",
+    )
+
+
+def test_recover_request_reports_uncertain_for_duplicate_or_unusable_history():
+    duplicate_turn = {"id": "turn-1", "clientUserMessageId": "request-1", "status": "completed"}
+    adapter, _transport = adapter_with({"thread": {"turns": [duplicate_turn, duplicate_turn]}})
+
+    duplicate = adapter.recover_request(request_id="request-1", thread_id="thread-1")
+
+    assert duplicate == HostRecoveryEvidence(
+        HostDisposition.UNCERTAIN,
+        "thread history contains multiple turns for the broker request ID",
+    )
+
+    adapter, _transport = adapter_with(
+        {
+            "thread": {
+                "turns": [
+                    {
+                        "id": "turn-1",
+                        "clientUserMessageId": "request-1",
+                        "status": "completed",
+                        "items": [],
+                    }
+                ]
+            }
+        }
+    )
+
+    missing_text = adapter.recover_request(request_id="request-1", thread_id="thread-1")
+
+    assert missing_text == HostRecoveryEvidence(
+        HostDisposition.UNCERTAIN,
+        "the correlated completed turn has no canonical agent response",
+    )
