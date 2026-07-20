@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with its `codex resume` command after the first turn. The hands-free Codex
   lane defaults to `gpt-5.6-terra` with low reasoning and a 650 ms end-of-speech
   threshold for faster conversational turns, and transient local STT failures
-  no longer terminate the broker process.
+  no longer terminate the broker process. Listening cues are edge-triggered,
+  so empty timeout windows and blank-audio transcripts no longer produce a
+  repeating on/off chime cycle.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

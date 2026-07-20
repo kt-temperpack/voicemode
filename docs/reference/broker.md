@@ -7,9 +7,10 @@ thread, prints the complete answer, and speaks a separate one- or two-sentence
 summary. Follow-up speech stays in the same Codex thread until silence or an
 explicit sleep phrase closes the window.
 
-A rising chime means listening is active. A falling chime means the utterance
-closed and is being submitted; the microphone remains open between cues and is
-muted in software when VoiceMode is not listening. Set
+A rising chime means listening is active. It plays once and remains silent when
+an empty listen window rearms. A falling chime plays only after a real utterance
+is transcribed and submitted; blank audio produces no cue. The microphone
+remains open between cues and is muted in software when VoiceMode is not listening. Set
 `VOICEMODE_AUDIO_FEEDBACK=false` to disable both cues.
 
 ## Run and inspect it
