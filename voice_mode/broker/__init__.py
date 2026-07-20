@@ -1,6 +1,7 @@
 """Experimental audio-free conversation broker core."""
 
-from .state import InvalidTransition, transition
+from .state import InvalidTransition, project_broker_phase, transition
+from .turns import InvalidTurnTransition, reduce_turn
 from .types import (
     BrokerCapabilities,
     BrokerError,
@@ -8,9 +9,18 @@ from .types import (
     BrokerEvent,
     BrokerPhase,
     BrokerSnapshot,
+    CanonicalResponse,
     PendingUtterance,
+    PresentationState,
     ResultKind,
     SessionInfo,
+    TurnEnvelope,
+    TurnEvent,
+    TurnEventKind,
+    TurnIntent,
+    TurnProjection,
+    TurnReduction,
+    TurnState,
 )
 
 __all__ = [
@@ -20,9 +30,21 @@ __all__ = [
     "BrokerEvent",
     "BrokerPhase",
     "BrokerSnapshot",
+    "CanonicalResponse",
     "InvalidTransition",
+    "InvalidTurnTransition",
     "PendingUtterance",
+    "PresentationState",
     "ResultKind",
     "SessionInfo",
+    "TurnEnvelope",
+    "TurnEvent",
+    "TurnEventKind",
+    "TurnIntent",
+    "TurnProjection",
+    "TurnReduction",
+    "TurnState",
+    "project_broker_phase",
+    "reduce_turn",
     "transition",
 ]

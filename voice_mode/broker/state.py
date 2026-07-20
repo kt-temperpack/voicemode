@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from .types import BrokerError, BrokerErrorCode, BrokerEvent, BrokerPhase
+from .types import (
+    BrokerError,
+    BrokerErrorCode,
+    BrokerEvent,
+    BrokerPhase,
+    PresentationState,
+    TurnProjection,
+    TurnState,
+)
 
 
 class InvalidTransition(BrokerError):
@@ -39,3 +47,26 @@ def transition(phase: BrokerPhase, event: BrokerEvent) -> BrokerPhase:
         return _TRANSITIONS[(phase, event)]
     except KeyError as exc:
         raise InvalidTransition(phase, event) from exc
+
+
+def project_broker_phase(session_phase: BrokerPhase, projection: TurnProjection) -> BrokerPhase:
+    """Project detailed turn state onto the stable protocol-v1 phase vocabulary."""
+
+    if session_phase is BrokerPhase.ASLEEP:
+        return BrokerPhase.ASLEEP
+    if projection.state is TurnState.CAPTURING:
+        return BrokerPhase.LISTENING
+    if projection.state in {
+        TurnState.ACCEPTED,
+        TurnState.DISPATCH_REQUESTED,
+        TurnState.DISPATCHED,
+        TurnState.RECOVERY_UNCERTAIN,
+    }:
+        return BrokerPhase.THINKING
+    if (
+        projection.state is TurnState.HOST_COMPLETED
+        and projection.presentation
+        in {PresentationState.READY, PresentationState.VISIBLE, PresentationState.TTS_STARTED}
+    ):
+        return BrokerPhase.SPEAKING
+    return session_phase

@@ -30,6 +30,53 @@ class BrokerEvent(str, Enum):
     RESET = "reset"
 
 
+class TurnState(str, Enum):
+    """Host-independent lifecycle of one accepted utterance."""
+
+    IDLE = "idle"
+    CAPTURING = "capturing"
+    ACCEPTED = "accepted"
+    DISPATCH_REQUESTED = "dispatch_requested"
+    DISPATCHED = "dispatched"
+    HOST_COMPLETED = "host_completed"
+    CANCELLED = "cancelled"
+    RECOVERY_UNCERTAIN = "recovery_uncertain"
+
+
+class PresentationState(str, Enum):
+    """At-most-once presentation lifecycle for a canonical response."""
+
+    NONE = "none"
+    READY = "ready"
+    VISIBLE = "visible"
+    TTS_STARTED = "tts_started"
+    COMPLETE = "complete"
+    TTS_FAILED = "tts_failed"
+
+
+class TurnEventKind(str, Enum):
+    CAPTURE_STARTED = "capture_started"
+    TRANSCRIPT_ACCEPTED = "transcript_accepted"
+    DISPATCH_REQUESTED = "dispatch_requested"
+    DISPATCH_CONFIRMED = "dispatch_confirmed"
+    HOST_COMPLETED = "host_completed"
+    VISIBLE_PRESENTED = "visible_presented"
+    TTS_STARTED = "tts_started"
+    TTS_COMPLETED = "tts_completed"
+    TTS_FAILED = "tts_failed"
+    CANCELLED = "cancelled"
+    RECOVERY_UNCERTAIN = "recovery_uncertain"
+
+
+class TurnIntent(str, Enum):
+    """Named I/O which the reducer authorizes but never performs."""
+
+    DISPATCH_HOST = "dispatch_host"
+    HANDLE_CONTROL = "handle_control"
+    PRESENT_VISIBLE = "present_visible"
+    START_TTS = "start_tts"
+
+
 class ResultKind(str, Enum):
     STATUS = "status"
     SESSION = "session"
@@ -83,6 +130,58 @@ class PendingUtterance:
     utterance_id: str
     text: str
     captured_at: datetime
+
+
+@dataclass(frozen=True)
+class TurnEnvelope:
+    schema_version: int
+    utterance_id: str
+    request_id: str | None
+    broker_session_id: str
+    repo_root: str
+    host_adapter: str
+    host_thread_id: str | None
+    state: TurnState
+    transcript: str | None
+    control_intent: str | None
+    accepted_at: datetime | None
+
+
+@dataclass(frozen=True)
+class CanonicalResponse:
+    schema_version: int
+    request_id: str
+    thread_id: str
+    display_text: str
+    spoken_text: str
+    host_turn_id: str
+    completed_at: datetime
+
+
+@dataclass(frozen=True)
+class TurnEvent:
+    kind: TurnEventKind
+    envelope: TurnEnvelope | None = None
+    response: CanonicalResponse | None = None
+
+
+@dataclass(frozen=True)
+class TurnProjection:
+    """Complete deterministic kernel state for the current turn."""
+
+    envelope: TurnEnvelope | None = None
+    response: CanonicalResponse | None = None
+    presentation: PresentationState = PresentationState.NONE
+
+    @property
+    def state(self) -> TurnState:
+        return self.envelope.state if self.envelope is not None else TurnState.IDLE
+
+
+@dataclass(frozen=True)
+class TurnReduction:
+    projection: TurnProjection
+    intents: tuple[TurnIntent, ...] = ()
 
 
 @dataclass(frozen=True)
