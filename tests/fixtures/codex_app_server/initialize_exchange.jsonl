@@ -1,0 +1,3 @@
+{"id":1,"method":"initialize","params":{"clientInfo":{"name":"voicemode","version":"test"}}}
+{"id":1,"result":{"codexHome":"/synthetic/codex-home","platformFamily":"unix","platformOs":"macos","userAgent":"codex-test"}}
+{"method":"initialized","params":{}}

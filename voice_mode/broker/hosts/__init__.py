@@ -7,6 +7,15 @@ from .base import (
     Unsubscribe,
     require_capability,
 )
+from .app_server_transport import (
+    AppServerClosed,
+    AppServerProtocolFault,
+    AppServerRemoteError,
+    AppServerRequestCancelled,
+    AppServerRequestTimeout,
+    AppServerTransport,
+    AppServerTransportError,
+)
 
 __all__ = [
     "HostAdapter",
@@ -14,4 +23,11 @@ __all__ = [
     "HostEventSink",
     "Unsubscribe",
     "require_capability",
+    "AppServerClosed",
+    "AppServerProtocolFault",
+    "AppServerRemoteError",
+    "AppServerRequestCancelled",
+    "AppServerRequestTimeout",
+    "AppServerTransport",
+    "AppServerTransportError",
 ]
