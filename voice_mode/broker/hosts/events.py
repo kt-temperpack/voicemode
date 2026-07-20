@@ -85,6 +85,17 @@ class AppServerEventMapper:
         params = message.get("params")
         if not isinstance(method, str) or not isinstance(params, dict):
             return
+        if method == "voicemode/transportLost":
+            reason = params.get("reason")
+            self._publish(
+                HostEvent(
+                    HostEventKind.TRANSPORT_LOST,
+                    None,
+                    None,
+                    error=str(reason)[:500] if reason else "app-server transport lost",
+                )
+            )
+            return
         turn_id = self._turn_id(params)
         if method in _APPROVAL_METHODS:
             self._consume_approval(message, params, turn_id)
@@ -155,7 +166,7 @@ class AppServerEventMapper:
                 HostEventKind.TURN_CANCELLED, request_id, thread_id, turn_id
             )
         elif status == "completed":
-            text = self._agent_text(turn.get("items"))
+            text = self.agent_text(turn.get("items"))
             completed_at = turn.get("completedAt")
             completed = (
                 datetime.fromtimestamp(completed_at, timezone.utc)
@@ -241,7 +252,7 @@ class AppServerEventMapper:
             messages.append(message)
 
     @staticmethod
-    def _agent_text(items: Any) -> str:
+    def agent_text(items: Any) -> str:
         if not isinstance(items, list):
             return ""
         messages = [

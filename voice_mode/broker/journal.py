@@ -41,6 +41,9 @@ class JournalEvent:
     provider: str | None = None
     error_code: str | None = None
     transcript: str | None = None
+    decision: str | None = None
+    reason: str | None = None
+    attempt: str | None = None
 
 
 @dataclass(frozen=True)
@@ -61,6 +64,9 @@ class JournalRecord:
     provider: str | None = None
     error_code: str | None = None
     transcript: str | None = None
+    decision: str | None = None
+    reason: str | None = None
+    attempt: str | None = None
 
     def payload(self, *, include_transcript: bool) -> dict[str, Any]:
         payload = asdict(self)

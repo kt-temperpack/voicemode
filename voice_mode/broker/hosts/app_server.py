@@ -9,9 +9,11 @@ from typing import Any
 
 from ..types import (
     HostCapability,
+    HostCompletion,
     HostDisposition,
     HostErrorKind,
     HostProbe,
+    HostRecoveryEvidence,
     HostThreadSummary,
     HostTurn,
     HostTurnState,
@@ -259,6 +261,102 @@ class AppServerHostAdapter(HostAdapter):
 
     def query_disposition(self, *, request_id: str, thread_id: str) -> HostDisposition:
         return self._events.disposition(request_id, thread_id)
+
+    def recover_request(
+        self,
+        *,
+        request_id: str,
+        thread_id: str,
+    ) -> HostRecoveryEvidence:
+        """Query durable thread history instead of an empty new event mapper."""
+
+        result = self._request(
+            "thread/read",
+            {"threadId": thread_id, "includeTurns": True},
+        )
+        thread = result.get("thread") if isinstance(result, dict) else None
+        turns = thread.get("turns") if isinstance(thread, dict) else None
+        if not isinstance(turns, list):
+            raise HostAdapterError(
+                HostErrorKind.HOST_REJECTION,
+                "thread/read",
+                "Codex returned thread history without a turns list",
+            )
+        matches = [turn for turn in turns if self._turn_request_id(turn) == request_id]
+        if not matches:
+            return HostRecoveryEvidence(
+                HostDisposition.ABSENT,
+                "thread history contains no turn for the broker request ID",
+            )
+        if len(matches) != 1:
+            return HostRecoveryEvidence(
+                HostDisposition.UNCERTAIN,
+                "thread history contains multiple turns for the broker request ID",
+            )
+        turn = matches[0]
+        turn_id = turn.get("id")
+        if not isinstance(turn_id, str):
+            return HostRecoveryEvidence(
+                HostDisposition.UNCERTAIN,
+                "correlated thread history has no stable host turn ID",
+            )
+        status = turn.get("status")
+        status_type = status.get("type") if isinstance(status, dict) else status
+        if status_type in {"inProgress", "in_progress", "active"}:
+            return HostRecoveryEvidence(
+                HostDisposition.IN_PROGRESS,
+                "the correlated Codex turn is still in progress",
+            )
+        if status_type in {"interrupted", "cancelled", "canceled"}:
+            return HostRecoveryEvidence(
+                HostDisposition.CANCELLED,
+                "the correlated Codex turn has terminal cancellation evidence",
+            )
+        if status_type != "completed":
+            return HostRecoveryEvidence(
+                HostDisposition.UNCERTAIN,
+                f"the correlated Codex turn has unrecognized status {status_type!r}",
+            )
+        text = AppServerEventMapper.agent_text(turn.get("items"))
+        if not text:
+            return HostRecoveryEvidence(
+                HostDisposition.UNCERTAIN,
+                "the correlated completed turn has no canonical agent response",
+            )
+        completed_at = turn.get("completedAt")
+        completed = (
+            datetime.fromtimestamp(completed_at, timezone.utc)
+            if isinstance(completed_at, (int, float))
+            else datetime.now(timezone.utc)
+        )
+        return HostRecoveryEvidence(
+            HostDisposition.COMPLETED,
+            "thread history proves the correlated Codex turn completed",
+            HostCompletion(
+                request_id,
+                thread_id,
+                turn_id,
+                text,
+                text,
+                completed,
+            ),
+        )
+
+    @staticmethod
+    def _turn_request_id(turn: Any) -> str | None:
+        if not isinstance(turn, dict):
+            return None
+        direct = turn.get("clientUserMessageId")
+        if isinstance(direct, str):
+            return direct
+        items = turn.get("items")
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict) and isinstance(
+                    item.get("clientUserMessageId"), str
+                ):
+                    return item["clientUserMessageId"]
+        return None
 
     def close(self) -> None:
         if self._transport_unsubscribe is not None:

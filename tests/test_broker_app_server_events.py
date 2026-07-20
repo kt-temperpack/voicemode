@@ -144,3 +144,21 @@ def test_unknown_or_malformed_messages_are_ignored():
 
     assert events == []
     assert mapper.disposition("missing", "thread-1") is HostDisposition.ABSENT
+
+
+def test_transport_loss_is_published_once_with_bounded_reason():
+    mapper = AppServerEventMapper()
+    events = []
+    mapper.subscribe(events.append)
+
+    mapper.consume(
+        {
+            "method": "voicemode/transportLost",
+            "params": {"reason": "synthetic disconnect"},
+        }
+    )
+
+    assert len(events) == 1
+    assert events[0].kind is HostEventKind.TRANSPORT_LOST
+    assert events[0].request_id is None
+    assert events[0].error == "synthetic disconnect"

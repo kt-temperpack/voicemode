@@ -65,6 +65,7 @@ class BrokerRuntime:
         self._pending: PendingUtterance | None = None
         self._turn = TurnProjection()
         self._recovered_dispatches = self._recover_dispatches()
+        self._dispatch_frozen_reason: str | None = None
         self._shutting_down = False
 
     def _recover_dispatches(self) -> dict[str, DispatchDisposition]:
@@ -326,6 +327,12 @@ class BrokerRuntime:
                 or envelope.request_id != request_id
             ):
                 return DispatchClaim(request_id, disposition, False)
+            if self._dispatch_frozen_reason is not None:
+                raise BrokerError(
+                    BrokerErrorCode.TIMEOUT,
+                    f"host dispatch is frozen: {self._dispatch_frozen_reason}",
+                    retryable=True,
+                )
             reduction = reduce_turn(
                 self._turn,
                 TurnEvent(TurnEventKind.DISPATCH_REQUESTED),
@@ -337,6 +344,73 @@ class BrokerRuntime:
             self._append_turn_event("dispatch_claimed", claimed)
             self._turn = reduction.projection
             return DispatchClaim(request_id, DispatchDisposition.CLAIMED, True)
+
+    def freeze_dispatch(self, reason: str) -> None:
+        with self._condition:
+            self._dispatch_frozen_reason = reason[:500]
+
+    def resume_dispatch(self) -> None:
+        with self._condition:
+            self._dispatch_frozen_reason = None
+
+    @property
+    def dispatch_frozen_reason(self) -> str | None:
+        with self._condition:
+            return self._dispatch_frozen_reason
+
+    def restore_host_completion(self, response: CanonicalResponse) -> bool:
+        """Restore presentable output from correlated host evidence after restart."""
+
+        with self._condition:
+            if (
+                self._turn.envelope is not None
+                and self._turn.envelope.request_id == response.request_id
+            ):
+                self.accept_host_completion(response)
+                return True
+            if self._journal is None:
+                return False
+            accepted = next(
+                (
+                    record
+                    for record in reversed(self._journal.read())
+                    if record.request_id == response.request_id
+                    and record.event == "turn_accepted"
+                ),
+                None,
+            )
+            if accepted is None or not all(
+                (
+                    accepted.utterance_id,
+                    accepted.broker_session_id,
+                    accepted.repo_root,
+                    accepted.adapter,
+                )
+            ):
+                return False
+            envelope = TurnEnvelope(
+                schema_version=1,
+                utterance_id=accepted.utterance_id,
+                request_id=response.request_id,
+                broker_session_id=accepted.broker_session_id,
+                repo_root=accepted.repo_root,
+                host_adapter=accepted.adapter,
+                host_thread_id=response.thread_id,
+                state=TurnState.HOST_COMPLETED,
+                transcript=None,
+                control_intent=None,
+                accepted_at=datetime.fromisoformat(accepted.occurred_at),
+            )
+            self._append_turn_event("host_completed", envelope)
+            self._turn = TurnProjection(
+                envelope=envelope,
+                response=response,
+                presentation=PresentationState.READY,
+            )
+            self._recovered_dispatches[response.request_id] = (
+                DispatchDisposition.COMPLETED
+            )
+            return True
 
     def confirm_dispatch(self, request_id: str) -> DispatchClaim:
         """Record host acceptance idempotently after a successful submission."""

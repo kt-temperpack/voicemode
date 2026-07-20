@@ -272,6 +272,13 @@ class HostCompletion:
 
 
 @dataclass(frozen=True)
+class HostRecoveryEvidence:
+    disposition: HostDisposition
+    rationale: str
+    completion: HostCompletion | None = None
+
+
+@dataclass(frozen=True)
 class HostApprovalRequest:
     request_id: str
     thread_id: str

@@ -415,9 +415,19 @@ class AppServerTransport:
             self._closed = True
             pending = tuple(self._pending.values())
             self._pending.clear()
+            sinks = tuple(self._sinks)
         for request in pending:
             request.error = fault
             request.event.set()
+        notice = {
+            "method": "voicemode/transportLost",
+            "params": {"reason": str(fault)[:500]},
+        }
+        for sink in sinks:
+            try:
+                sink(notice)
+            except Exception:
+                continue
         self._close_resources()
 
     def _close_resources(self) -> None:
