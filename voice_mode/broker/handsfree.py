@@ -22,6 +22,7 @@ from .activation import (
 )
 from .barge_in import BargeInCoordinator
 from .codex import CodexAdapter, CodexTurnError
+from .compatibility import probe_startup_compatibility
 from .cues import CueKind, CuePolicy
 from .hosts import (
     AppServerHostAdapter,
@@ -243,6 +244,7 @@ class HandsFreeLoop:
         activation_bus: ActivationBus | None = None,
         display: Callable[[str], None] = print,
         terminal: TerminalPresenter | None = None,
+        tts_enabled: bool = True,
     ) -> None:
         self.repo_root = Path(repo_root).resolve()
         self.runtime = runtime
@@ -254,6 +256,8 @@ class HandsFreeLoop:
         self.host_probe = host_adapter.probe()
         self.display = display
         self.terminal = terminal
+        self._tts_enabled = tts_enabled
+        self._tts_failure_shown = False
         self._event_loop: asyncio.AbstractEventLoop | None = None
         self._cue_sequence = 0
         cue_players = {
@@ -271,7 +275,7 @@ class HandsFreeLoop:
         self._presenter = Presenter(
             runtime,
             display=lambda text: self.display(f"\nCodex:\n{text}\n"),
-            speak=audio.speak,
+            speak=self._speak,
         )
         self._activation_lock = threading.Lock()
         self._activation_state = ActivationState()
@@ -340,6 +344,26 @@ class HandsFreeLoop:
             self.display(f"You: {pending}")
         return pending
 
+    async def _speak(self, message: str) -> None:
+        if not self._tts_enabled:
+            raise RuntimeError("voice output is unavailable")
+        try:
+            await self.audio.speak(message)
+        except Exception as error:
+            self._tts_enabled = False
+            if not self._tts_failure_shown:
+                self._tts_failure_shown = True
+                self.display(
+                    f"Voice output unavailable; continuing with visible responses: {error}"
+                )
+            raise
+
+    async def _speak_optional(self, message: str) -> None:
+        try:
+            await self._speak(message)
+        except Exception:
+            pass
+
     def _consume_direct_capture(self) -> bool:
         with self._activation_lock:
             direct = self._activation_state.direct_capture
@@ -369,7 +393,7 @@ class HandsFreeLoop:
         self.display(f"Wake phrase: {self.wake_phrase}")
         self.display("Hands-free Codex ready")
         self._state(BrokerEvent.RESET, "asleep")
-        await self.audio.speak(
+        await self._speak_optional(
             f"Hands-free Codex is ready. Say {self.wake_phrase}, followed by your request."
         )
         session_id: str | None = None
@@ -403,12 +427,12 @@ class HandsFreeLoop:
                     continue
                 if intent == "sleep":
                     pending = None
-                    await self.audio.speak(
+                    await self._speak_optional(
                         f"Going to sleep. Say {self.wake_phrase} when you need me."
                     )
                     continue
                 if intent == "exit":
-                    await self.audio.speak("Hands-free Codex is stopping.")
+                    await self._speak_optional("Hands-free Codex is stopping.")
                     self.runtime.begin_shutdown()
                     return
                 session = self.runtime.open_session(
@@ -429,11 +453,11 @@ class HandsFreeLoop:
                 self._close_session(session_id)
                 session_id = None
                 pending = None
-                await self.audio.speak(f"Going to sleep. Say {self.wake_phrase} when you need me.")
+                await self._speak_optional(f"Going to sleep. Say {self.wake_phrase} when you need me.")
                 continue
             if intent == "exit":
                 self._close_session(session_id)
-                await self.audio.speak("Hands-free Codex is stopping.")
+                await self._speak_optional("Hands-free Codex is stopping.")
                 self.runtime.begin_shutdown()
                 return
 
@@ -487,7 +511,7 @@ class HandsFreeLoop:
                 self._close_session(session_id)
                 session_id = None
                 pending = None
-                await self.audio.speak("Codex hit an error. I went back to sleep.")
+                await self._speak_optional("Codex hit an error. I went back to sleep.")
                 continue
 
             if self.runtime.snapshot().shutting_down:
@@ -552,7 +576,7 @@ class HandsFreeLoop:
         if self.recovery is None:
             self.runtime.mark_dispatch_uncertain(request_id)
             self.display(f"Codex connection lost: {error}")
-            await self.audio.speak("Codex disconnected. I stopped without retrying the request.")
+            await self._speak_optional("Codex disconnected. I stopped without retrying the request.")
             return None
         self.display("Codex connection lost; checking the exact turn before continuing…")
         decision = await asyncio.to_thread(
@@ -567,7 +591,7 @@ class HandsFreeLoop:
         if decision.action is RecoveryAction.PRESENT:
             return self.runtime.canonical_response(request_id)
         self.display(f"Codex recovery stopped: {decision.rationale}")
-        await self.audio.speak("Codex recovery could not prove a final answer, so I did not retry it.")
+        await self._speak_optional("Codex recovery could not prove a final answer, so I did not retry it.")
         return None
 
     async def _listen_safely(self) -> str | None:
@@ -662,6 +686,19 @@ def run_handsfree_broker(
         else:
             selected_thread_id = EXEC_NEW_THREAD_ID
 
+    assert host_adapter is not None
+    try:
+        compatibility = probe_startup_compatibility(host_adapter.probe())
+        compatibility.require_supported_input()
+    except Exception:
+        host_adapter.close()
+        raise
+    for issue in compatibility.issues:
+        print(
+            f"Compatibility {issue.severity.value}: {issue.message}. "
+            f"Run: {issue.recovery_command}"
+        )
+
     runtime = None
     server = None
     server_thread = None
@@ -681,6 +718,7 @@ def run_handsfree_broker(
             socket_path,
             audio_enabled=True,
             journal=journal,
+            compatibility=compatibility.projection(),
         )
         recovery = (
             RecoveryCoordinator(runtime, journal, recovery_factory)
@@ -722,6 +760,10 @@ def run_handsfree_broker(
             activation_bus=activation_bus,
             terminal=terminal,
             display=terminal.line,
+            tts_enabled=any(
+                provider.service == "tts" and provider.available
+                for provider in compatibility.providers
+            ),
         )
         if hotkey:
             hotkey_adapter = PlatformHotkeyAdapter(hotkey, activation_bus)

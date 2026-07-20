@@ -271,11 +271,13 @@ class BrokerDispatcher:
         *,
         audio_enabled: bool = False,
         interrupt_callback: Callable[[], None] | None = None,
+        compatibility: dict | None = None,
     ) -> None:
         self.runtime = runtime
         self.stop_callback = stop_callback
         self.audio_enabled = audio_enabled
         self.interrupt_callback = interrupt_callback
+        self.compatibility = compatibility
 
     @staticmethod
     def _session_payload(session, age_seconds: float) -> dict:
@@ -297,7 +299,7 @@ class BrokerDispatcher:
                 "pending_turn_limit": capabilities.pending_turn_limit,
                 "audio_enabled": capabilities.audio_enabled,
             }
-        return {
+        result = {
             "protocol_versions": [1, 2],
             "operations": [
                 "status",
@@ -311,6 +313,9 @@ class BrokerDispatcher:
             "pending_turn_limit": capabilities.pending_turn_limit,
             "audio_enabled": capabilities.audio_enabled,
         }
+        if self.compatibility is not None:
+            result["compatibility"] = self.compatibility
+        return result
 
     def _v2_projection(self) -> dict:
         return {
@@ -392,9 +397,14 @@ def create_broker(
     event_sink=None,
     audio_enabled: bool = False,
     journal=None,
+    compatibility: dict | None = None,
 ):
     runtime = BrokerRuntime(event_sink=event_sink, journal=journal)
-    dispatcher = BrokerDispatcher(runtime, audio_enabled=audio_enabled)
+    dispatcher = BrokerDispatcher(
+        runtime,
+        audio_enabled=audio_enabled,
+        compatibility=compatibility,
+    )
     server = BrokerServer(socket_path or BROKER_SOCKET_PATH, dispatcher, event_sink=event_sink)
     dispatcher.stop_callback = server.stop
     return runtime, dispatcher, server

@@ -2,6 +2,7 @@ from click.testing import CliRunner
 
 from voice_mode.cli import voice_mode_main_cli
 from voice_mode.cli_commands import broker as broker_module
+from voice_mode.broker.protocol import LATEST_PROTOCOL_VERSION
 
 
 def test_root_and_group_help_register_commands():
@@ -53,6 +54,30 @@ def test_live_status_rendering(monkeypatch):
     machine = CliRunner().invoke(voice_mode_main_cli, ["broker", "status", "--json"])
     assert machine.exit_code == 0
     assert '"shutting_down": false' in machine.output
+
+
+def test_status_requests_latest_capabilities_protocol(monkeypatch):
+    selected = []
+
+    class VersionedClient:
+        def __init__(self, _path, *, protocol_version):
+            selected.append(protocol_version)
+
+        def status(self):
+            return {
+                "state": "asleep",
+                "session": None,
+                "pending_turns": 0,
+                "uptime_seconds": 1.0,
+                "protocol_version": LATEST_PROTOCOL_VERSION,
+            }
+
+    monkeypatch.setattr(broker_module, "BrokerClient", VersionedClient)
+
+    result = CliRunner().invoke(voice_mode_main_cli, ["broker", "status", "--json"])
+
+    assert result.exit_code == 0
+    assert selected == [LATEST_PROTOCOL_VERSION]
 
 
 def test_run_maps_bind_failure(monkeypatch, tmp_path):

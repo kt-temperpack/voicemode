@@ -272,6 +272,16 @@ def test_auto_adapter_uses_native_app_server_and_exact_thread(monkeypatch, tmp_p
         ),
     )
     monkeypatch.setattr(handsfree_module, "PersistentVoiceAudio", FakeAudioLifecycle)
+    monkeypatch.setattr(
+        handsfree_module,
+        "probe_startup_compatibility",
+            lambda probe: SimpleNamespace(
+                issues=(),
+                providers=(SimpleNamespace(service="tts", available=True),),
+                require_supported_input=lambda: calls.append(("compatibility", probe)),
+            projection=lambda: {"disposition": "supported"},
+        ),
+    )
 
     def close_coroutine(coroutine):
         calls.append("loop-run")
@@ -301,6 +311,12 @@ def test_auto_adapter_uses_native_app_server_and_exact_thread(monkeypatch, tmp_p
     loop_call = next(call for call in calls if isinstance(call, tuple) and call[0] == "loop")
     assert loop_call[1]["host_adapter"] is host
     assert loop_call[1]["thread_id"] == "current-thread"
+    compatibility_index = next(
+        index
+        for index, call in enumerate(calls)
+        if isinstance(call, tuple) and call[0] == "compatibility"
+    )
+    assert compatibility_index < calls.index("audio-start")
     assert calls.index("loop-close") < calls.index("host-close")
 
 
@@ -377,6 +393,27 @@ async def test_loop_announces_exact_thread_before_first_dispatch(tmp_path):
     assert displayed.count("Codex thread: current-thread") == 1
     assert codex.prompts == ["inspect the repo"]
     assert runtime.snapshot().shutting_down is True
+
+
+@pytest.mark.asyncio
+async def test_loop_without_tts_stays_visible_and_does_not_crash(tmp_path):
+    audio = FakeAudio(["Computer, exit voice mode"])
+    displayed = []
+    loop = HandsFreeLoop(
+        repo_root=tmp_path,
+        runtime=BrokerRuntime(),
+        audio=audio,
+        wake_phrase="Computer",
+        host_adapter=handsfree_module.ExecCodexAdapter(FakeCodex()),
+        thread_id="current-thread",
+        display=displayed.append,
+        tts_enabled=False,
+    )
+
+    await loop.run()
+
+    assert "Hands-free Codex ready" in displayed
+    assert audio.spoken == []
 
 
 @pytest.mark.asyncio

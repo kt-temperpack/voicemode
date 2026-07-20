@@ -45,6 +45,16 @@ _CAPABILITIES = frozenset(
     }
 )
 
+_METHOD_CAPABILITIES = {
+    "thread/list": HostCapability.LIST_THREADS,
+    "thread/read": HostCapability.READ_THREAD,
+    "thread/resume": HostCapability.ATTACH_THREAD,
+    "thread/start": HostCapability.CREATE_THREAD,
+    "turn/start": HostCapability.START_TURN,
+    "turn/steer": HostCapability.STEER_TURN,
+    "turn/interrupt": HostCapability.INTERRUPT_TURN,
+}
+
 
 class AppServerHostAdapter(HostAdapter):
     """Translate current Codex app-server thread methods into stable host types."""
@@ -127,13 +137,37 @@ class AppServerHostAdapter(HostAdapter):
                 str(error),
             )
         else:
+            capabilities = self._declared_capabilities()
             self._probe = HostProbe(
                 "app-server",
                 True,
-                _CAPABILITIES,
+                capabilities,
                 str(version) if version else None,
             )
         return self._probe
+
+    def _declared_capabilities(self) -> frozenset[HostCapability]:
+        """Use live method declarations when Codex provides them.
+
+        Older app-server versions do not advertise a method list, so their
+        successful thread probe retains the established capability set.
+        """
+        declared = self._initialize_result.get("capabilities")
+        methods = declared.get("methods") if isinstance(declared, dict) else None
+        if not isinstance(methods, list) or not all(
+            isinstance(method, str) for method in methods
+        ):
+            return _CAPABILITIES
+        capabilities = {
+            capability
+            for method, capability in _METHOD_CAPABILITIES.items()
+            if method in methods
+        }
+        if HostCapability.START_TURN in capabilities:
+            capabilities.add(HostCapability.SUBSCRIBE_EVENTS)
+        if HostCapability.READ_THREAD in capabilities:
+            capabilities.add(HostCapability.QUERY_DISPOSITION)
+        return frozenset(capabilities)
 
     def list_threads(self, repo_root: str | None = None) -> tuple[HostThreadSummary, ...]:
         params: dict[str, Any] = {

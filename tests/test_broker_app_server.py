@@ -130,6 +130,32 @@ def test_probe_discovers_thread_contract_and_is_cached():
     assert [call[0] for call in transport.calls] == ["thread/list"]
 
 
+def test_probe_respects_live_declared_method_capabilities():
+    transport = ScriptedTransport({"data": [], "nextCursor": None})
+    adapter = AppServerHostAdapter(
+        transport,
+        {
+            "userAgent": "codex-limited",
+            "capabilities": {
+                "methods": ["thread/list", "thread/read", "turn/start"]
+            },
+        },
+    )
+
+    probe = adapter.probe()
+
+    assert probe.capabilities == frozenset(
+        {
+            HostCapability.LIST_THREADS,
+            HostCapability.READ_THREAD,
+            HostCapability.START_TURN,
+            HostCapability.SUBSCRIBE_EVENTS,
+            HostCapability.QUERY_DISPOSITION,
+        }
+    )
+    assert HostCapability.INTERRUPT_TURN not in probe.capabilities
+
+
 def test_list_threads_is_repo_scoped_paginated_and_normalized(tmp_path):
     adapter, transport = adapter_with(
         {"data": [thread_payload("thread-2", cwd=str(tmp_path))], "nextCursor": "next"},

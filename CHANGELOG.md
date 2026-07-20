@@ -72,6 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   commands now control that service with deterministic human and JSON output,
   stable exit categories, and exact corrections for common command mistakes;
   the lower-level `voicemode broker` commands remain available for diagnostics.
+  Startup now checks installed CLI commands, broker/plugin protocol ranges,
+  local speech-provider health, and live Codex method capabilities before audio
+  capture. Hard incompatibilities return one recovery command, safe fallbacks
+  are labeled as degraded, and the redacted result is exposed in broker status.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

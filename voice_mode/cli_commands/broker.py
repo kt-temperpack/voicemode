@@ -9,6 +9,7 @@ import click
 
 from voice_mode.broker import BrokerError
 from voice_mode.broker.client import BrokerClient, BrokerUnavailable
+from voice_mode.broker.protocol import LATEST_PROTOCOL_VERSION
 from voice_mode.broker.server import run_broker
 from voice_mode.config import (
     BROKER_CODEX_EXECUTABLE,
@@ -188,7 +189,9 @@ def broker_converse(
 def broker_status(as_json: bool, socket_path: Path):
     """Show the broker's current state."""
     try:
-        result = BrokerClient(socket_path).status()
+        result = BrokerClient(
+            socket_path, protocol_version=LATEST_PROTOCOL_VERSION
+        ).status()
     except BrokerUnavailable:
         if as_json:
             click.echo(json.dumps({"running": False}, sort_keys=True))

@@ -10,9 +10,8 @@ This module handles automatic discovery of TTS/STT endpoints, including:
 
 import asyncio
 import logging
-import time
 from typing import Dict, List, Optional, Any
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -170,12 +169,30 @@ class ProviderRegistry:
                         last_check=datetime.now(timezone.utc).isoformat(),
                         last_error=str(result)
                     )
+
+    async def probe_compatibility(self) -> Dict[str, tuple[EndpointInfo, ...]]:
+        """Refresh configured endpoints and return a startup-safe snapshot.
+
+        Callers decide which capabilities are mandatory. Raw URLs and provider
+        errors stay inside the registry so status projections cannot disclose
+        credentials embedded in endpoint configuration.
+        """
+        await self.initialize()
+        tasks = [
+            self._discover_endpoint(service, url)
+            for service, urls in (("stt", STT_BASE_URLS), ("tts", TTS_BASE_URLS))
+            for url in urls
+        ]
+        if tasks:
+            await asyncio.gather(*tasks)
+        return {
+            service: tuple(self.get_endpoints(service))
+            for service in ("stt", "tts")
+        }
     
     async def _discover_endpoint(self, service_type: str, base_url: str) -> None:
         """Discover capabilities of a single endpoint."""
         logger.debug(f"Discovering {service_type} endpoint: {base_url}")
-        start_time = time.time()
-
         # Cartesia is not OpenAI-compatible; skip /v1/models probing and
         # populate from config directly. Treat any UUID-shaped entry in
         # VOICEMODE_VOICES as a Cartesia voice id so voice switching works
@@ -263,9 +280,6 @@ class ProviderRegistry:
             if service_type == "tts":
                 voices = await self._discover_voices(base_url, client)
                 logger.debug(f"Found voices at {base_url}: {voices}")
-            
-            # Calculate response time
-            response_time = (time.time() - start_time) * 1000
             
             # Store endpoint info
             self.registry[service_type][base_url] = EndpointInfo(
