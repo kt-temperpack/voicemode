@@ -87,8 +87,51 @@ def test_converse_alias_starts_handsfree_loop(monkeypatch, tmp_path):
     )
     result = CliRunner().invoke(
         voice_mode_main_cli,
-        ["broker", "converse", "--repo", str(tmp_path), "--socket", str(tmp_path / "broker.sock")],
+        [
+            "broker",
+            "converse",
+            "--repo",
+            str(tmp_path),
+            "--adapter",
+            "exec",
+            "--thread",
+            "current-thread",
+            "--socket",
+            str(tmp_path / "broker.sock"),
+        ],
     )
     assert result.exit_code == 0
     assert calls[0][0] == tmp_path / "broker.sock"
     assert calls[0][1]["repo_root"] == tmp_path
+    assert calls[0][1]["codex_adapter"] == "exec"
+    assert calls[0][1]["codex_thread_id"] == "current-thread"
+    assert calls[0][1]["new_thread"] is False
+
+
+def test_run_forwards_new_thread_selection(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(
+        "voice_mode.broker.handsfree.run_handsfree_broker",
+        lambda path, **kwargs: calls.append((path, kwargs)),
+    )
+
+    result = CliRunner().invoke(
+        voice_mode_main_cli,
+        [
+            "broker",
+            "run",
+            "--repo",
+            str(tmp_path),
+            "--adapter",
+            "exec",
+            "--thread",
+            "ignored-thread",
+            "--new-thread",
+            "--socket",
+            str(tmp_path / "broker.sock"),
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert calls[0][1]["codex_thread_id"] == "ignored-thread"
+    assert calls[0][1]["new_thread"] is True

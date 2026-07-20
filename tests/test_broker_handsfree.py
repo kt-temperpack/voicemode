@@ -26,6 +26,7 @@ class FakeAudio:
     async def cue_submitted(self):
         self.cues.append("submitted")
 
+
 class FakeCodex:
     thread_id = "codex-1"
 
@@ -94,6 +95,41 @@ async def test_loop_ignores_ambient_then_reuses_codex_for_followup(tmp_path):
     assert runtime.snapshot().session is None
     fixture = Path(__file__).parent / "fixtures" / "broker" / "handsfree_cues.json"
     assert audio.cues == json.loads(fixture.read_text(encoding="utf-8"))
+
+
+@pytest.mark.asyncio
+async def test_loop_announces_exact_thread_before_first_dispatch(tmp_path):
+    audio = FakeAudio(
+        [
+            "Computer, inspect the repo",
+            "nice",
+            "Computer, exit voice mode",
+        ]
+    )
+    codex = FakeCodex()
+    codex.thread_id = "current-thread"
+    displayed = []
+    runtime = BrokerRuntime()
+    loop = HandsFreeLoop(
+        repo_root=tmp_path,
+        runtime=runtime,
+        audio=audio,
+        wake_phrase="Computer",
+        codex_factory=lambda _root: codex,
+        initial_thread_id="current-thread",
+        adapter_kind="exec",
+        display=displayed.append,
+    )
+
+    await loop.run()
+
+    adapter_index = displayed.index("Codex adapter: exec")
+    thread_index = displayed.index("Codex thread: current-thread")
+    dispatch_index = displayed.index("Codex: working…")
+    assert adapter_index < thread_index < dispatch_index
+    assert displayed.count("Codex thread: current-thread") == 1
+    assert codex.prompts == ["inspect the repo"]
+    assert runtime.snapshot().shutting_down is True
 
 
 @pytest.mark.asyncio

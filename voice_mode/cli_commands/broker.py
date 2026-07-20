@@ -12,9 +12,11 @@ from voice_mode.broker.client import BrokerClient, BrokerUnavailable
 from voice_mode.broker.server import run_broker
 from voice_mode.config import (
     BROKER_CODEX_EXECUTABLE,
+    BROKER_CODEX_ADAPTER,
     BROKER_CODEX_MODEL,
     BROKER_CODEX_REASONING_EFFORT,
     BROKER_CODEX_SANDBOX,
+    BROKER_CODEX_THREAD_ID,
     BROKER_LISTEN_DURATION_SECONDS,
     BROKER_MIN_LISTEN_DURATION_SECONDS,
     BROKER_SILENCE_THRESHOLD_MS,
@@ -52,6 +54,21 @@ def _socket_option(function):
 @click.option("--wake-phrase", default=BROKER_WAKE_PHRASE, show_default=True)
 @click.option("--voice", default=BROKER_VOICE, show_default=True)
 @click.option("--listen-duration", type=float, default=BROKER_LISTEN_DURATION_SECONDS, show_default=True)
+@click.option(
+    "--adapter",
+    "codex_adapter",
+    type=click.Choice(["auto", "app-server", "exec"]),
+    default=BROKER_CODEX_ADAPTER,
+    show_default=True,
+    help="Codex host adapter.",
+)
+@click.option(
+    "--thread",
+    "codex_thread_id",
+    default=BROKER_CODEX_THREAD_ID,
+    help="Exact Codex thread ID. Defaults to the calling Codex session when available.",
+)
+@click.option("--new-thread", is_flag=True, help="Create a separate Codex thread.")
 @_socket_option
 def broker_run(
     socket_path: Path,
@@ -60,6 +77,9 @@ def broker_run(
     wake_phrase: str,
     repo_root: Path,
     daemon_only: bool,
+    codex_adapter: str,
+    codex_thread_id: str | None,
+    new_thread: bool,
 ):
     """Run hands-free Codex in the foreground."""
     try:
@@ -81,8 +101,11 @@ def broker_run(
                 codex_model=BROKER_CODEX_MODEL,
                 codex_reasoning_effort=BROKER_CODEX_REASONING_EFFORT,
                 silence_threshold_ms=BROKER_SILENCE_THRESHOLD_MS,
+                codex_adapter=codex_adapter,
+                codex_thread_id=codex_thread_id,
+                new_thread=new_thread,
             )
-    except OSError as error:
+    except (OSError, RuntimeError) as error:
         raise click.ClickException(
             f"could not start broker at {socket_path}: {error}. Check the path and permissions."
         ) from error
@@ -93,6 +116,15 @@ def broker_run(
 @click.option("--wake-phrase", default=BROKER_WAKE_PHRASE, show_default=True)
 @click.option("--voice", default=BROKER_VOICE, show_default=True)
 @click.option("--listen-duration", type=float, default=BROKER_LISTEN_DURATION_SECONDS, show_default=True)
+@click.option(
+    "--adapter",
+    "codex_adapter",
+    type=click.Choice(["auto", "app-server", "exec"]),
+    default=BROKER_CODEX_ADAPTER,
+    show_default=True,
+)
+@click.option("--thread", "codex_thread_id", default=BROKER_CODEX_THREAD_ID)
+@click.option("--new-thread", is_flag=True)
 @_socket_option
 def broker_converse(
     socket_path: Path,
@@ -100,6 +132,9 @@ def broker_converse(
     voice: str,
     wake_phrase: str,
     repo_root: Path,
+    codex_adapter: str,
+    codex_thread_id: str | None,
+    new_thread: bool,
 ):
     """Explicit alias for the foreground hands-free Codex loop."""
     broker_run.callback(
@@ -109,6 +144,9 @@ def broker_converse(
         wake_phrase=wake_phrase,
         repo_root=repo_root,
         daemon_only=False,
+        codex_adapter=codex_adapter,
+        codex_thread_id=codex_thread_id,
+        new_thread=new_thread,
     )
 
 

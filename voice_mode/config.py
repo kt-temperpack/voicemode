@@ -744,6 +744,14 @@ BROKER_CODEX_MODEL = os.getenv("VOICEMODE_BROKER_CODEX_MODEL", "gpt-5.6-terra").
 BROKER_CODEX_REASONING_EFFORT = os.getenv("VOICEMODE_BROKER_CODEX_REASONING_EFFORT", "low").strip()
 if BROKER_CODEX_REASONING_EFFORT not in {"low", "medium", "high", "xhigh", "max", "ultra"}:
     BROKER_CODEX_REASONING_EFFORT = "low"
+BROKER_CODEX_ADAPTER = os.getenv("VOICEMODE_BROKER_CODEX_ADAPTER", "auto").strip().lower()
+if BROKER_CODEX_ADAPTER not in {"auto", "app-server", "exec"}:
+    BROKER_CODEX_ADAPTER = "auto"
+BROKER_CODEX_THREAD_ID = (
+    os.getenv("VOICEMODE_BROKER_CODEX_THREAD_ID", "").strip()
+    or os.getenv("CODEX_THREAD_ID", "").strip()
+    or None
+)
 
 # Hardening (F4 / VM-1697): a `pause` holds the global audio lock while playback
 # waits, so a pause that is never resumed (a forgotten/buggy trigger, or a

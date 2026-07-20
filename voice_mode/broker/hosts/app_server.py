@@ -1,0 +1,255 @@
+"""Codex app-server host adapter for capability and thread management."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from ..types import (
+    HostCapability,
+    HostDisposition,
+    HostErrorKind,
+    HostProbe,
+    HostThreadSummary,
+    HostTurn,
+)
+from .app_server_transport import (
+    AppServerClosed,
+    AppServerProtocolFault,
+    AppServerRemoteError,
+    AppServerRequestCancelled,
+    AppServerRequestTimeout,
+    AppServerTransport,
+    AppServerTransportError,
+)
+from .base import HostAdapter, HostAdapterError, HostEventSink, Unsubscribe
+
+
+_THREAD_CAPABILITIES = frozenset(
+    {
+        HostCapability.LIST_THREADS,
+        HostCapability.READ_THREAD,
+        HostCapability.ATTACH_THREAD,
+        HostCapability.CREATE_THREAD,
+    }
+)
+
+
+class AppServerHostAdapter(HostAdapter):
+    """Translate current Codex app-server thread methods into stable host types."""
+
+    def __init__(
+        self,
+        transport: AppServerTransport,
+        initialize_result: dict[str, Any],
+        *,
+        request_timeout: float = 10.0,
+    ) -> None:
+        self._transport = transport
+        self._initialize_result = initialize_result
+        self._request_timeout = request_timeout
+        self._probe: HostProbe | None = None
+        self._broker_owned: set[str] = set()
+
+    @classmethod
+    def connect(
+        cls,
+        transport: AppServerTransport,
+        *,
+        client_name: str = "voicemode",
+        client_version: str = "development",
+        timeout: float = 10.0,
+    ) -> AppServerHostAdapter:
+        try:
+            result = transport.initialize(
+                {"name": client_name, "version": client_version}, timeout=timeout
+            )
+        except BaseException:
+            transport.close()
+            raise
+        return cls(transport, result, request_timeout=timeout)
+
+    def _request(self, method: str, params: dict[str, Any]) -> Any:
+        try:
+            return self._transport.request(method, params, timeout=self._request_timeout)
+        except AppServerRemoteError as error:
+            raise HostAdapterError(
+                HostErrorKind.HOST_REJECTION,
+                method,
+                f"Codex rejected {method}: {error}",
+            ) from error
+        except (AppServerClosed, AppServerRequestTimeout, AppServerRequestCancelled) as error:
+            raise HostAdapterError(
+                HostErrorKind.RETRYABLE_TRANSPORT,
+                method,
+                f"Codex app-server transport failed during {method}: {error}",
+            ) from error
+        except (AppServerProtocolFault, AppServerTransportError) as error:
+            raise HostAdapterError(
+                HostErrorKind.UNAVAILABLE,
+                method,
+                f"Codex app-server protocol failed during {method}: {error}",
+            ) from error
+
+    def _unsupported(self, operation: HostCapability):
+        raise HostAdapterError(
+            HostErrorKind.UNSUPPORTED,
+            operation.value,
+            f"Codex app-server adapter does not yet support {operation.value}",
+        )
+
+    def probe(self) -> HostProbe:
+        if self._probe is not None:
+            return self._probe
+        version = self._initialize_result.get("userAgent")
+        try:
+            self._request("thread/list", {"limit": 1, "useStateDbOnly": True})
+        except HostAdapterError as error:
+            available = error.kind is HostErrorKind.HOST_REJECTION
+            self._probe = HostProbe(
+                "app-server",
+                available,
+                frozenset(),
+                str(version) if version else None,
+                str(error),
+            )
+        else:
+            self._probe = HostProbe(
+                "app-server",
+                True,
+                _THREAD_CAPABILITIES,
+                str(version) if version else None,
+            )
+        return self._probe
+
+    def list_threads(self, repo_root: str | None = None) -> tuple[HostThreadSummary, ...]:
+        params: dict[str, Any] = {
+            "limit": 100,
+            "sortKey": "updated_at",
+            "sortDirection": "desc",
+        }
+        if repo_root is not None:
+            params["cwd"] = str(Path(repo_root).resolve(strict=False))
+        summaries = []
+        seen_cursors = set()
+        for _page in range(10):
+            result = self._request("thread/list", params)
+            if not isinstance(result, dict) or not isinstance(result.get("data"), list):
+                raise HostAdapterError(
+                    HostErrorKind.HOST_REJECTION,
+                    "thread/list",
+                    "Codex returned an invalid thread list",
+                )
+            summaries.extend(self._summary(item) for item in result["data"])
+            cursor = result.get("nextCursor")
+            if cursor is None:
+                return tuple(summaries)
+            if not isinstance(cursor, str) or cursor in seen_cursors:
+                raise HostAdapterError(
+                    HostErrorKind.AMBIGUOUS,
+                    "thread/list",
+                    "Codex returned an invalid pagination cursor",
+                )
+            seen_cursors.add(cursor)
+            params["cursor"] = cursor
+        raise HostAdapterError(
+            HostErrorKind.AMBIGUOUS,
+            "thread/list",
+            "Codex thread listing exceeded the bounded page limit",
+        )
+
+    def read_thread(self, thread_id: str) -> HostThreadSummary:
+        result = self._request(
+            "thread/read", {"threadId": thread_id, "includeTurns": False}
+        )
+        return self._response_summary(result, "thread/read")
+
+    def attach_thread(self, thread_id: str) -> HostThreadSummary:
+        result = self._request("thread/resume", {"threadId": thread_id, "excludeTurns": True})
+        return self._response_summary(result, "thread/resume")
+
+    def create_thread(self, repo_root: str, label: str) -> HostThreadSummary:
+        canonical_root = str(Path(repo_root).resolve(strict=False))
+        result = self._request(
+            "thread/start",
+            {"cwd": canonical_root, "threadSource": "appServer"},
+        )
+        summary = self._response_summary(result, "thread/start")
+        self._request("thread/setName", {"threadId": summary.thread_id, "name": label})
+        self._broker_owned.add(summary.thread_id)
+        return replace(summary, title=label, broker_owned=True)
+
+    def start_turn(self, *, request_id: str, thread_id: str, prompt: str) -> HostTurn:
+        return self._unsupported(HostCapability.START_TURN)
+
+    def steer_turn(
+        self,
+        *,
+        request_id: str,
+        thread_id: str,
+        host_turn_id: str,
+        prompt: str,
+    ) -> HostTurn:
+        return self._unsupported(HostCapability.STEER_TURN)
+
+    def interrupt_turn(
+        self,
+        *,
+        request_id: str,
+        thread_id: str,
+        host_turn_id: str,
+    ) -> HostTurn:
+        return self._unsupported(HostCapability.INTERRUPT_TURN)
+
+    def subscribe(self, sink: HostEventSink) -> Unsubscribe:
+        return self._unsupported(HostCapability.SUBSCRIBE_EVENTS)
+
+    def query_disposition(self, *, request_id: str, thread_id: str) -> HostDisposition:
+        return self._unsupported(HostCapability.QUERY_DISPOSITION)
+
+    def close(self) -> None:
+        self._transport.close()
+
+    def _response_summary(self, result: Any, operation: str) -> HostThreadSummary:
+        if not isinstance(result, dict) or not isinstance(result.get("thread"), dict):
+            raise HostAdapterError(
+                HostErrorKind.HOST_REJECTION,
+                operation,
+                f"Codex returned an invalid response for {operation}",
+            )
+        return self._summary(result["thread"])
+
+    def _summary(self, payload: Any) -> HostThreadSummary:
+        if not isinstance(payload, dict):
+            raise HostAdapterError(
+                HostErrorKind.HOST_REJECTION,
+                "thread/parse",
+                "Codex returned an invalid thread entry",
+            )
+        thread_id = payload.get("id")
+        cwd = payload.get("cwd")
+        if not isinstance(thread_id, str) or not isinstance(cwd, str):
+            raise HostAdapterError(
+                HostErrorKind.HOST_REJECTION,
+                "thread/parse",
+                "Codex thread identity is incomplete",
+            )
+        updated = payload.get("updatedAt")
+        updated_at = (
+            datetime.fromtimestamp(updated, timezone.utc)
+            if isinstance(updated, (int, float))
+            else None
+        )
+        status = payload.get("status")
+        status_type = status.get("type") if isinstance(status, dict) else None
+        title = payload.get("name") or payload.get("preview") or None
+        return HostThreadSummary(
+            thread_id=thread_id,
+            repo_root=str(Path(cwd).resolve(strict=False)),
+            title=str(title) if title else None,
+            updated_at=updated_at,
+            active=status_type in {"active", "idle"},
+            broker_owned=thread_id in self._broker_owned,
+        )

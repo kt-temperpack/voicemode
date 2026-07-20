@@ -54,6 +54,8 @@ class HandsFreeLoop:
         audio: PersistentVoiceAudio,
         wake_phrase: str,
         codex_factory: Callable[[Path], CodexAdapter],
+        initial_thread_id: str | None = None,
+        adapter_kind: str = "exec",
         display: Callable[[str], None] = print,
     ) -> None:
         self.repo_root = Path(repo_root).resolve()
@@ -61,6 +63,8 @@ class HandsFreeLoop:
         self.audio = audio
         self.wake_phrase = wake_phrase
         self.codex_factory = codex_factory
+        self.initial_thread_id = initial_thread_id
+        self.adapter_kind = adapter_kind
         self.display = display
         self._codex: CodexAdapter | None = None
         self._shown_codex_thread: str | None = None
@@ -79,6 +83,11 @@ class HandsFreeLoop:
         )
         self.display(f"Hands-free Codex ready in {self.repo_root}")
         self.display(f"Wake phrase: {self.wake_phrase}")
+        self.display(f"Codex adapter: {self.adapter_kind}")
+        if self.initial_thread_id:
+            self.display(f"Codex thread: {self.initial_thread_id}")
+            self.display(f"Open it later: codex resume {self.initial_thread_id}")
+            self._shown_codex_thread = self.initial_thread_id
         session_id: str | None = None
         pending: str | None = None
 
@@ -104,7 +113,9 @@ class HandsFreeLoop:
                     await self.audio.speak("Hands-free Codex is stopping.")
                     self.runtime.begin_shutdown()
                     return
-                session = self.runtime.open_session("handsfree", str(self.repo_root))
+                session = self.runtime.open_session(
+                    self.initial_thread_id or "handsfree", str(self.repo_root)
+                )
                 session_id = session.session_id
                 self.runtime.activate(session_id)
                 if self._codex is None:
@@ -193,7 +204,28 @@ def run_handsfree_broker(
     codex_model: str,
     codex_reasoning_effort: str,
     silence_threshold_ms: int,
+    codex_adapter: str = "auto",
+    codex_thread_id: str | None = None,
+    new_thread: bool = False,
 ) -> None:
+    resolved_adapter = "exec" if codex_adapter == "auto" else codex_adapter
+    if resolved_adapter != "exec":
+        raise RuntimeError(
+            "app-server turn execution is not available yet; use --adapter exec"
+        )
+    selected_thread_id = None if new_thread else codex_thread_id
+
+    def codex_factory(root: Path) -> CodexAdapter:
+        adapter = CodexAdapter(
+            root,
+            executable=codex_executable,
+            sandbox=codex_sandbox,
+            model=codex_model,
+            reasoning_effort=codex_reasoning_effort,
+        )
+        adapter.thread_id = selected_thread_id
+        return adapter
+
     runtime, _dispatcher, server = create_broker(socket_path, audio_enabled=True)
     server.start()
     server_thread = threading.Thread(target=server.serve_forever, name="voicemode-broker", daemon=True)
@@ -211,13 +243,9 @@ def run_handsfree_broker(
         runtime=runtime,
         audio=audio,
         wake_phrase=wake_phrase,
-        codex_factory=lambda root: CodexAdapter(
-            root,
-            executable=codex_executable,
-            sandbox=codex_sandbox,
-            model=codex_model,
-            reasoning_effort=codex_reasoning_effort,
-        ),
+        codex_factory=codex_factory,
+        initial_thread_id=selected_thread_id,
+        adapter_kind=resolved_adapter,
     )
     try:
         asyncio.run(loop.run())

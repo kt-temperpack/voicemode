@@ -16,6 +16,13 @@ from .app_server_transport import (
     AppServerTransport,
     AppServerTransportError,
 )
+from .app_server import AppServerHostAdapter
+from .selection import (
+    ThreadSelection,
+    ThreadSelectionSource,
+    canonical_repo_root,
+    select_thread,
+)
 
 __all__ = [
     "HostAdapter",
@@ -30,4 +37,9 @@ __all__ = [
     "AppServerRequestTimeout",
     "AppServerTransport",
     "AppServerTransportError",
+    "AppServerHostAdapter",
+    "ThreadSelection",
+    "ThreadSelectionSource",
+    "canonical_repo_root",
+    "select_thread",
 ]
