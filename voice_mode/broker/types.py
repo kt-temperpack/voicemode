@@ -105,6 +105,18 @@ class HostDisposition(str, Enum):
     UNCERTAIN = "uncertain"
 
 
+class DispatchDisposition(str, Enum):
+    """Broker evidence about whether one request crossed the host boundary."""
+
+    PENDING = "pending"
+    CLAIMED = "claimed"
+    CONFIRMED = "confirmed"
+    COMPLETED = "completed"
+    SAFE_TO_CANCEL = "safe_to_cancel"
+    CANCELLED = "cancelled"
+    UNCERTAIN = "uncertain"
+
+
 class HostEventKind(str, Enum):
     TURN_STARTED = "turn_started"
     TURN_COMPLETED = "turn_completed"
@@ -176,6 +188,13 @@ class PendingUtterance:
     utterance_id: str
     text: str
     captured_at: datetime
+
+
+@dataclass(frozen=True)
+class DispatchClaim:
+    request_id: str
+    disposition: DispatchDisposition
+    should_dispatch: bool
 
 
 @dataclass(frozen=True)

@@ -10,15 +10,24 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from .journal import JournalEvent, TurnJournal
 from .state import transition
+from .turns import reduce_turn
 from .types import (
     BrokerError,
     BrokerErrorCode,
     BrokerEvent,
     BrokerPhase,
     BrokerSnapshot,
+    DispatchClaim,
+    DispatchDisposition,
     PendingUtterance,
     SessionInfo,
+    TurnEnvelope,
+    TurnEvent,
+    TurnEventKind,
+    TurnProjection,
+    TurnState,
 )
 
 EventSink = Callable[[str, dict], None]
@@ -38,19 +47,59 @@ class BrokerRuntime:
         utc_now: Callable[[], datetime] = _utc_now,
         uuid_factory: Callable[[], object] = uuid.uuid4,
         event_sink: EventSink | None = None,
+        journal: TurnJournal | None = None,
     ) -> None:
         self._condition = threading.Condition()
         self._monotonic = monotonic
         self._utc_now = utc_now
         self._uuid_factory = uuid_factory
         self._event_sink = event_sink
+        self._journal = journal
         self._started_at = monotonic()
         self._phase_changed_at = self._started_at
         self._phase = BrokerPhase.ASLEEP
         self._session: SessionInfo | None = None
         self._last_closed_session_id: str | None = None
         self._pending: PendingUtterance | None = None
+        self._turn = TurnProjection()
+        self._recovered_dispatches = self._recover_dispatches()
         self._shutting_down = False
+
+    def _recover_dispatches(self) -> dict[str, DispatchDisposition]:
+        """Classify durable evidence without ever authorizing replay."""
+
+        if self._journal is None:
+            return {}
+        recovered: dict[str, DispatchDisposition] = {}
+        for record in self._journal.read():
+            if record.request_id is None:
+                continue
+            if record.event == "turn_accepted":
+                recovered[record.request_id] = DispatchDisposition.SAFE_TO_CANCEL
+            elif record.event in {"dispatch_claimed", "dispatch_confirmed"}:
+                recovered[record.request_id] = DispatchDisposition.UNCERTAIN
+            elif record.event == "host_completed":
+                recovered[record.request_id] = DispatchDisposition.COMPLETED
+            elif record.event == "turn_cancelled":
+                recovered[record.request_id] = DispatchDisposition.CANCELLED
+        return recovered
+
+    def _append_turn_event(self, event: str, envelope: TurnEnvelope) -> None:
+        if self._journal is None:
+            return
+        self._journal.append(
+            JournalEvent(
+                event=event,
+                request_id=envelope.request_id,
+                utterance_id=envelope.utterance_id,
+                broker_session_id=envelope.broker_session_id,
+                repo_root=envelope.repo_root,
+                adapter=envelope.host_adapter,
+                codex_thread_id=envelope.host_thread_id,
+                to_state=envelope.state.value,
+                transcript=envelope.transcript,
+            )
+        )
 
     def _emit(self, name: str, **data) -> None:
         if self._event_sink is not None:
@@ -153,6 +202,141 @@ class BrokerRuntime:
             queue_count=1,
         )
         return utterance
+
+    def accept_turn(
+        self,
+        session_id: str,
+        text: str | None,
+        *,
+        host_adapter: str,
+        host_thread_id: str | None,
+        control_intent: str | None = None,
+    ) -> TurnEnvelope:
+        """Durably accept one request and assign all replay-sensitive identity."""
+
+        transcript = text.strip() if text is not None else None
+        if bool(transcript) == bool(control_intent):
+            raise BrokerError(
+                BrokerErrorCode.INVALID_REQUEST,
+                "exactly one transcript or control intent is required",
+            )
+        with self._condition:
+            session = self._require_session(session_id)
+            if self._turn.state not in {
+                TurnState.IDLE,
+                TurnState.CANCELLED,
+                TurnState.HOST_COMPLETED,
+            }:
+                raise BrokerError(
+                    BrokerErrorCode.QUEUE_FULL,
+                    "pending turn slot is full",
+                    retryable=True,
+                )
+            utterance_id = str(self._uuid_factory())
+            request_id = str(self._uuid_factory())
+            capturing = TurnEnvelope(
+                schema_version=1,
+                utterance_id=utterance_id,
+                request_id=None,
+                broker_session_id=session_id,
+                repo_root=session.repo_root,
+                host_adapter=host_adapter,
+                host_thread_id=host_thread_id,
+                state=TurnState.CAPTURING,
+                transcript=None,
+                control_intent=None,
+                accepted_at=None,
+            )
+            projection = reduce_turn(
+                self._turn,
+                TurnEvent(TurnEventKind.CAPTURE_STARTED, envelope=capturing),
+            ).projection
+            accepted = replace(
+                capturing,
+                request_id=request_id,
+                state=TurnState.ACCEPTED,
+                transcript=transcript,
+                control_intent=control_intent,
+                accepted_at=self._utc_now(),
+            )
+            projection = reduce_turn(
+                projection,
+                TurnEvent(TurnEventKind.TRANSCRIPT_ACCEPTED, envelope=accepted),
+            ).projection
+            self._append_turn_event("turn_accepted", accepted)
+            self._turn = projection
+            self._condition.notify_all()
+        self._emit(
+            "BROKER_TURN_ACCEPTED",
+            session_id=session_id,
+            request_id=request_id,
+            queue_count=1,
+        )
+        return accepted
+
+    def _current_dispatch_disposition(self, request_id: str) -> DispatchDisposition:
+        envelope = self._turn.envelope
+        if envelope is not None and envelope.request_id == request_id:
+            return {
+                TurnState.ACCEPTED: DispatchDisposition.PENDING,
+                TurnState.DISPATCH_REQUESTED: DispatchDisposition.CLAIMED,
+                TurnState.DISPATCHED: DispatchDisposition.CONFIRMED,
+                TurnState.HOST_COMPLETED: DispatchDisposition.COMPLETED,
+                TurnState.CANCELLED: DispatchDisposition.CANCELLED,
+                TurnState.RECOVERY_UNCERTAIN: DispatchDisposition.UNCERTAIN,
+            }.get(envelope.state, DispatchDisposition.PENDING)
+        try:
+            return self._recovered_dispatches[request_id]
+        except KeyError as error:
+            raise BrokerError(
+                BrokerErrorCode.INVALID_REQUEST,
+                "request is not known to this broker",
+            ) from error
+
+    def dispatch_disposition(self, request_id: str) -> DispatchDisposition:
+        with self._condition:
+            return self._current_dispatch_disposition(request_id)
+
+    def claim_dispatch(self, request_id: str) -> DispatchClaim:
+        """Atomically grant the only host submission authorized for a request."""
+
+        with self._condition:
+            disposition = self._current_dispatch_disposition(request_id)
+            envelope = self._turn.envelope
+            if (
+                disposition is not DispatchDisposition.PENDING
+                or envelope is None
+                or envelope.request_id != request_id
+            ):
+                return DispatchClaim(request_id, disposition, False)
+            reduction = reduce_turn(
+                self._turn,
+                TurnEvent(TurnEventKind.DISPATCH_REQUESTED),
+            )
+            claimed = reduction.projection.envelope
+            assert claimed is not None
+            # This append is the dispatch boundary: it must succeed before the
+            # caller receives authority to invoke the host.
+            self._append_turn_event("dispatch_claimed", claimed)
+            self._turn = reduction.projection
+            return DispatchClaim(request_id, DispatchDisposition.CLAIMED, True)
+
+    def confirm_dispatch(self, request_id: str) -> DispatchClaim:
+        """Record host acceptance idempotently after a successful submission."""
+
+        with self._condition:
+            disposition = self._current_dispatch_disposition(request_id)
+            if disposition is not DispatchDisposition.CLAIMED:
+                return DispatchClaim(request_id, disposition, False)
+            reduction = reduce_turn(
+                self._turn,
+                TurnEvent(TurnEventKind.DISPATCH_CONFIRMED),
+            )
+            confirmed = reduction.projection.envelope
+            assert confirmed is not None
+            self._append_turn_event("dispatch_confirmed", confirmed)
+            self._turn = reduction.projection
+            return DispatchClaim(request_id, DispatchDisposition.CONFIRMED, False)
 
     def wait_for_turn(
         self,
