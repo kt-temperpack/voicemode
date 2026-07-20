@@ -3,8 +3,10 @@
 The conversation broker is a foreground hands-free loop for Codex. It keeps one
 microphone stream open for the process lifetime, segments utterances locally
 with VAD, wakes on `Computer`, runs the request in one persistent Codex CLI
-thread, prints the complete answer, and speaks a separate one- or two-sentence
-summary. Follow-up speech stays in the same Codex thread until silence or an
+thread, and prints the complete answer. The model produces one canonical
+answer; the spoken text is a short
+verbatim excerpt of that answer rather than a separately generated reply.
+Follow-up speech stays in the same Codex thread until silence or an
 explicit sleep phrase closes the window.
 
 The microphone is always listening for the wake phrase. After a standalone

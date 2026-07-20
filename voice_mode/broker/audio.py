@@ -41,11 +41,17 @@ def _clean_transcript(text: str) -> str | None:
 
 
 async def _speak_local(message: str, voice: str) -> None:
-    from voice_mode.tools.converse import text_to_speech_with_failover
+    from voice_mode.audio_player import NonBlockingAudioPlayer
+    from voice_mode.tools.converse import synthesize_turn_with_failover
 
-    success, _metrics, _config = await text_to_speech_with_failover(message, voice=voice)
-    if not success:
+    success, samples, sample_rate, _metrics, _config = await synthesize_turn_with_failover(
+        message,
+        voice=voice,
+    )
+    if not success or samples is None or sample_rate is None:
         raise RuntimeError("local text-to-speech failed")
+    player = NonBlockingAudioPlayer()
+    await asyncio.to_thread(player.play, samples, sample_rate, blocking=True)
 
 
 async def _transcribe_local(audio: np.ndarray) -> str | None:

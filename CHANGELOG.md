@@ -26,7 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   state: a rising tone acknowledges a standalone wake phrase and a falling tone
   confirms request submission, while empty timeouts, ambient speech, and blank
   audio stay silent. Both `Computer` and `Hey Computer` activate the wake
-  parser, including normal trailing punctuation.
+  parser, including normal trailing punctuation. Each accepted prompt now
+  produces one canonical model response; terminal output shows it once and TTS
+  plays one short verbatim excerpt through buffered, single-shot playback.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

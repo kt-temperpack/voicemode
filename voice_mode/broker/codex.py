@@ -27,16 +27,12 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 _RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
-        "display_text": {
+        "response": {
             "type": "string",
-            "description": "The complete final answer for the terminal, including useful technical detail.",
-        },
-        "spoken_summary": {
-            "type": "string",
-            "description": "A natural one or two sentence spoken recap, at most 45 words. Never read code, commands, tables, or paths aloud.",
+            "description": "One cohesive final answer. Keep it concise and lead with the result; include technical detail only when it changes what the user does next.",
         },
     },
-    "required": ["display_text", "spoken_summary"],
+    "required": ["response"],
     "additionalProperties": False,
 }
 
@@ -61,7 +57,7 @@ def _parse_thread_id(stdout: str) -> str | None:
 
 
 class CodexAdapter:
-    """Run one resumable Codex thread and split visual from spoken output."""
+    """Run one resumable Codex thread with one canonical response."""
 
     def __init__(
         self,
@@ -162,10 +158,10 @@ class CodexAdapter:
             except json.JSONDecodeError:
                 payload = None
             if isinstance(payload, dict):
-                display = payload.get("display_text")
-                spoken = payload.get("spoken_summary")
-                if isinstance(display, str) and display.strip() and isinstance(spoken, str) and spoken.strip():
-                    return CodexTurn(display.strip(), _fallback_summary(spoken), self.thread_id)
+                response = payload.get("response")
+                if isinstance(response, str) and response.strip():
+                    response = response.strip()
+                    return CodexTurn(response, _fallback_summary(response), self.thread_id)
             if not raw:
                 raise CodexTurnError("Codex returned an empty final response")
             return CodexTurn(raw, _fallback_summary(raw), self.thread_id)

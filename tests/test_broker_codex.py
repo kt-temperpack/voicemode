@@ -22,7 +22,7 @@ def _runner_factory(stdout, payload, returncode=0, stderr=""):
 
 def test_first_turn_starts_thread_and_second_resumes(tmp_path):
     stdout = json.dumps({"type": "thread.started", "thread_id": "thread-123"}) + "\n"
-    payload = json.dumps({"display_text": "Full answer", "spoken_summary": "Short answer"})
+    payload = json.dumps({"response": "One cohesive answer"})
     calls, runner = _runner_factory(stdout, payload)
     adapter = CodexAdapter(tmp_path, runner=runner)
 
@@ -30,8 +30,7 @@ def test_first_turn_starts_thread_and_second_resumes(tmp_path):
     second = adapter.run_turn("second")
 
     assert first.thread_id == second.thread_id == "thread-123"
-    assert first.display_text == "Full answer"
-    assert first.spoken_summary == "Short answer"
+    assert first.display_text == first.spoken_summary == "One cohesive answer"
     assert calls[0][0][:2] == ["codex", "exec"]
     assert calls[0][0][calls[0][0].index("--model") + 1] == "gpt-5.6-terra"
     assert 'model_reasoning_effort="low"' in calls[0][0]
@@ -65,6 +64,6 @@ def test_events_are_forwarded_and_failures_are_bounded(tmp_path):
 
 
 def test_missing_thread_id_is_rejected(tmp_path):
-    _, runner = _runner_factory("{}", json.dumps({"display_text": "x", "spoken_summary": "y"}))
+    _, runner = _runner_factory("{}", json.dumps({"response": "x"}))
     with pytest.raises(CodexTurnError, match="thread ID"):
         CodexAdapter(tmp_path, runner=runner).run_turn("hello")

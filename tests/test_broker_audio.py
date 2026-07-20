@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from voice_mode.broker import audio as audio_module
-from voice_mode.broker.audio import PersistentVoiceAudio, _clean_transcript
+from voice_mode.broker.audio import PersistentVoiceAudio, _clean_transcript, _speak_local
 
 
 class FakeStream:
@@ -26,6 +26,32 @@ def test_blank_audio_markers_are_not_turns():
     assert _clean_transcript("[BLANK_AUDIO]") is None
     assert _clean_transcript("  [silence]  ") is None
     assert _clean_transcript("actual request") == "actual request"
+
+
+@pytest.mark.asyncio
+async def test_local_speech_synthesizes_then_plays_exactly_once(monkeypatch):
+    from voice_mode import audio_player
+    from voice_mode.tools import converse
+
+    events = []
+
+    async def synthesize(message, **kwargs):
+        events.append(("synthesize", message, kwargs["voice"]))
+        return True, np.array([0.1], dtype=np.float32), 24000, {}, {}
+
+    class Player:
+        def play(self, samples, sample_rate, *, blocking):
+            events.append(("play", samples.tolist(), sample_rate, blocking))
+
+    monkeypatch.setattr(converse, "synthesize_turn_with_failover", synthesize)
+    monkeypatch.setattr(audio_player, "NonBlockingAudioPlayer", Player)
+
+    await _speak_local("one answer", "am_michael")
+
+    assert events == [
+        ("synthesize", "one answer", "am_michael"),
+        ("play", pytest.approx([0.1]), 24000, True),
+    ]
 
 
 @pytest.mark.asyncio
