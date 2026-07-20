@@ -52,6 +52,8 @@ def test_wake_and_control_parsing_is_strict():
     assert wake_command("my computer is slow", "Computer") is None
     assert control_intent("Go to sleep.") == "sleep"
     assert control_intent("exit voice mode") == "exit"
+    assert control_intent("Nice.") == "ack"
+    assert control_intent("Thank you!") == "ack"
     assert control_intent("please go to sleep after this") is None
 
 
@@ -76,7 +78,7 @@ async def test_loop_ignores_ambient_then_reuses_codex_for_followup(tmp_path):
             "ambient speech",
             "Computer, inspect the repo",
             "run focused tests",
-            "go to sleep",
+            "nice",
             "Computer, exit voice mode",
         ]
     )

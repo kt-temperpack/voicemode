@@ -1,3 +1,5 @@
+from collections import deque
+
 import numpy as np
 import pytest
 
@@ -7,6 +9,7 @@ from voice_mode.broker.audio import (
     _clean_transcript,
     _play_listening_cue,
     _play_submitted_cue,
+    _speech_tail_is_silent,
     _speak_local,
 )
 
@@ -34,6 +37,14 @@ def test_blank_audio_markers_are_not_turns():
     assert _clean_transcript("actual request") == "actual request"
 
 
+def test_endpoint_tolerates_isolated_vad_noise():
+    frames = deque([False] * 27 + [True, False, False], maxlen=30)
+    assert _speech_tail_is_silent(frames, 30)
+
+    frames.extend([True, True, True])
+    assert not _speech_tail_is_silent(frames, 30)
+
+
 @pytest.mark.asyncio
 async def test_local_speech_synthesizes_then_plays_exactly_once(monkeypatch):
     from voice_mode import audio_player
@@ -52,7 +63,7 @@ async def test_local_speech_synthesizes_then_plays_exactly_once(monkeypatch):
     monkeypatch.setattr(converse, "synthesize_turn_with_failover", synthesize)
     monkeypatch.setattr(audio_player, "NonBlockingAudioPlayer", Player)
 
-    await _speak_local("one answer", "am_michael")
+    await _speak_local("one answer", "am_michael", 1.35)
 
     assert events == [
         ("synthesize", "one answer", "am_michael"),
@@ -95,8 +106,8 @@ async def test_stream_stays_open_across_speak_and_listen(monkeypatch):
         streams.append(stream)
         return stream
 
-    async def speak(message, voice):
-        spoken.append((message, voice))
+    async def speak(message, voice, speed):
+        spoken.append((message, voice, speed))
 
     async def transcribe(audio):
         transcribed.append(audio)
@@ -122,7 +133,10 @@ async def test_stream_stays_open_across_speak_and_listen(monkeypatch):
 
     assert len(streams) == 1
     assert streams[0].starts == streams[0].stops == streams[0].closes == 1
-    assert spoken == [("answer", "am_michael"), ("follow up", "am_michael")]
+    assert spoken == [
+        ("answer", "am_michael", 1.35),
+        ("follow up", "am_michael", 1.35),
+    ]
     assert len(transcribed) == 2
 
 

@@ -37,6 +37,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Broker cues omit the global Bluetooth silence padding, keeping wake
   acknowledgment to about 200 ms so request capture opens before the user
   starts speaking.
+  Broker speech now defaults to 1.35x speed, and brief acknowledgments such as
+  `nice` or `thanks` close the follow-up window without generating an extra
+  Codex response. End-of-speech detection now tolerates isolated VAD noise in
+  the trailing silence window instead of waiting until the full listen timeout.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

@@ -27,10 +27,18 @@ from voice_mode.config import (
 from voice_mode.provider_discovery import is_local_provider
 
 
-SpeakCallable = Callable[[str, str], Awaitable[None]]
+SpeakCallable = Callable[[str, str, float], Awaitable[None]]
 TranscribeCallable = Callable[[np.ndarray], Awaitable[str | None]]
 CueCallable = Callable[[], Awaitable[bool]]
 _EMPTY_TRANSCRIPTS = {"[blank_audio]", "[blank audio]", "[silence]", "[no speech]"}
+
+
+def _speech_tail_is_silent(frames: deque[bool], required_frames: int) -> bool:
+    """Treat a mostly-silent tail as an endpoint despite isolated VAD noise."""
+    if len(frames) < required_frames:
+        return False
+    allowed_speech_frames = max(1, required_frames // 10)
+    return sum(frames) <= allowed_speech_frames
 
 
 def _clean_transcript(text: str) -> str | None:
@@ -40,13 +48,14 @@ def _clean_transcript(text: str) -> str | None:
     return cleaned
 
 
-async def _speak_local(message: str, voice: str) -> None:
+async def _speak_local(message: str, voice: str, speed: float = 1.35) -> None:
     from voice_mode.audio_player import NonBlockingAudioPlayer
     from voice_mode.tools.converse import synthesize_turn_with_failover
 
     success, samples, sample_rate, _metrics, _config = await synthesize_turn_with_failover(
         message,
         voice=voice,
+        speed=speed,
     )
     if not success or samples is None or sample_rate is None:
         raise RuntimeError("local text-to-speech failed")
@@ -103,6 +112,7 @@ class PersistentVoiceAudio:
         voice: str,
         listen_duration: float,
         min_duration: float,
+        speed: float = 1.35,
         stream_factory=None,
         vad_factory=None,
         speak_callable: SpeakCallable = _speak_local,
@@ -115,6 +125,7 @@ class PersistentVoiceAudio:
         self.voice = voice
         self.listen_duration = listen_duration
         self.min_duration = min_duration
+        self.speed = speed
         self._stream_factory = stream_factory
         self._vad_factory = vad_factory
         self._speak_callable = speak_callable
@@ -178,7 +189,8 @@ class PersistentVoiceAudio:
         pre_roll = deque(maxlen=max(1, int(500 / VAD_CHUNK_DURATION_MS)))
         chunks: list[np.ndarray] = []
         speech_started = False
-        silence_ms = 0
+        endpoint_frames = max(1, -(-self._silence_threshold_ms // VAD_CHUNK_DURATION_MS))
+        speech_tail: deque[bool] = deque(maxlen=endpoint_frames)
         speech_started_at = 0.0
         deadline = time.monotonic() + self.listen_duration
         self._muted.clear()
@@ -202,16 +214,15 @@ class PersistentVoiceAudio:
                     speech_started = True
                     speech_started_at = time.monotonic()
                     chunks.extend(pre_roll)
-                    silence_ms = 0
+                    speech_tail.clear()
                     continue
 
                 chunks.append(chunk)
-                if is_speech:
-                    silence_ms = 0
-                else:
-                    silence_ms += VAD_CHUNK_DURATION_MS
+                speech_tail.append(is_speech)
                 speech_seconds = time.monotonic() - speech_started_at
-                if speech_seconds >= self.min_duration and silence_ms >= self._silence_threshold_ms:
+                if speech_seconds >= self.min_duration and _speech_tail_is_silent(
+                    speech_tail, endpoint_frames
+                ):
                     break
         finally:
             self._muted.set()
@@ -250,7 +261,7 @@ class PersistentVoiceAudio:
         self.start()
         self._muted.set()
         self._drain()
-        await self._speak_callable(message, self.voice)
+        await self._speak_callable(message, self.voice, self.speed)
         self._drain()
 
     async def exchange(self, message: str) -> str | None:

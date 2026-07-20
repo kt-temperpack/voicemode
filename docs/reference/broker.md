@@ -40,11 +40,17 @@ return to wake-only listening, or say `exit voice mode` to stop. The default
 voice is the local `am_michael` voice. Use `--repo`, `--voice`, `--wake-phrase`,
 and `--listen-duration` to override the everyday defaults.
 
+Broker speech defaults to 1.35x speed; override it with
+`VOICEMODE_BROKER_VOICE_SPEED`. Brief acknowledgments such as `nice`, `thanks`,
+or `got it` close the follow-up window silently instead of creating another
+Codex response.
+
 Hands-free turns default to `gpt-5.6-terra` with low reasoning so conversational
 responses don't inherit a slower interactive Codex profile. Override that lane
 with `VOICEMODE_BROKER_CODEX_MODEL` and
 `VOICEMODE_BROKER_CODEX_REASONING_EFFORT`. The broker uses a 900 ms
-end-of-speech threshold, configurable with
+mostly-silent end-of-speech window, so isolated VAD noise cannot keep the
+microphone open indefinitely. The window is configurable with
 `VOICEMODE_BROKER_SILENCE_THRESHOLD_MS`.
 
 The broker starts its own resumable `codex exec` thread in the selected
@@ -85,7 +91,8 @@ path is not safely owned by the current user; correct that ownership or choose
 an owner-controlled path with `--socket`.
 
 Configuration is environment-backed: `VOICEMODE_BROKER_WAKE_PHRASE`,
-`VOICEMODE_BROKER_VOICE`, `VOICEMODE_BROKER_LISTEN_DURATION_SECONDS`,
+`VOICEMODE_BROKER_VOICE`, `VOICEMODE_BROKER_VOICE_SPEED`,
+`VOICEMODE_BROKER_LISTEN_DURATION_SECONDS`,
 `VOICEMODE_BROKER_MIN_LISTEN_DURATION_SECONDS`,
 `VOICEMODE_BROKER_SILENCE_THRESHOLD_MS`, `VOICEMODE_BROKER_CODEX_EXECUTABLE`,
 `VOICEMODE_BROKER_CODEX_MODEL`, `VOICEMODE_BROKER_CODEX_REASONING_EFFORT`, and

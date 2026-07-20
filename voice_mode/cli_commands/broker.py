@@ -20,6 +20,7 @@ from voice_mode.config import (
     BROKER_SILENCE_THRESHOLD_MS,
     BROKER_SOCKET_PATH,
     BROKER_VOICE,
+    BROKER_VOICE_SPEED,
     BROKER_WAKE_PHRASE,
 )
 
@@ -72,6 +73,7 @@ def broker_run(
                 repo_root=repo_root,
                 wake_phrase=wake_phrase,
                 voice=voice,
+                voice_speed=BROKER_VOICE_SPEED,
                 listen_duration=listen_duration,
                 min_duration=BROKER_MIN_LISTEN_DURATION_SECONDS,
                 codex_executable=BROKER_CODEX_EXECUTABLE,

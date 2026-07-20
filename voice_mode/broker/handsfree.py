@@ -17,6 +17,7 @@ from .server import create_broker
 
 SLEEP_PHRASES = {"go to sleep", "stop listening", "sleep"}
 EXIT_PHRASES = {"exit voice mode", "quit voice mode", "goodbye", "shut down"}
+ACK_PHRASES = {"nice", "thanks", "thank you", "okay", "ok", "got it", "cool"}
 
 
 def wake_command(text: str, wake_phrase: str) -> str | None:
@@ -39,6 +40,8 @@ def control_intent(text: str) -> str | None:
         return "sleep"
     if normalized in EXIT_PHRASES:
         return "exit"
+    if normalized in ACK_PHRASES:
+        return "ack"
     return None
 
 
@@ -109,6 +112,12 @@ class HandsFreeLoop:
 
             assert pending is not None and session_id is not None and self._codex is not None
             intent = control_intent(pending)
+            if intent == "ack":
+                self._close_session(session_id)
+                session_id = None
+                pending = None
+                self.display(f"Acknowledged. Say {self.wake_phrase} for another request.")
+                continue
             if intent == "sleep":
                 self._close_session(session_id)
                 session_id = None
@@ -176,6 +185,7 @@ def run_handsfree_broker(
     repo_root: Path,
     wake_phrase: str,
     voice: str,
+    voice_speed: float,
     listen_duration: float,
     min_duration: float,
     codex_executable: str,
@@ -190,6 +200,7 @@ def run_handsfree_broker(
     server_thread.start()
     audio = PersistentVoiceAudio(
         voice=voice,
+        speed=voice_speed,
         listen_duration=listen_duration,
         min_duration=min_duration,
         silence_threshold_ms=silence_threshold_ms,
