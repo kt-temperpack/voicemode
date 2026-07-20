@@ -752,6 +752,20 @@ BROKER_CODEX_THREAD_ID = (
     or os.getenv("CODEX_THREAD_ID", "").strip()
     or None
 )
+BROKER_JOURNAL_DIR = expand_path(
+    os.getenv("VOICEMODE_BROKER_JOURNAL_DIR", str(BASE_DIR / "broker" / "journal"))
+)
+BROKER_JOURNAL_MAX_FILES = _bounded_env_number(
+    "VOICEMODE_BROKER_JOURNAL_MAX_FILES", 32, 1, 1_000, int
+)
+BROKER_JOURNAL_MAX_BYTES = _bounded_env_number(
+    "VOICEMODE_BROKER_JOURNAL_MAX_BYTES",
+    16 * 1024 * 1024,
+    64 * 1024,
+    1024 * 1024 * 1024,
+    int,
+)
+BROKER_JOURNAL_INCLUDE_TRANSCRIPT = SAVE_TRANSCRIPTIONS
 
 # Hardening (F4 / VM-1697): a `pause` holds the global audio lock while playback
 # waits, so a pause that is never resumed (a forgotten/buggy trigger, or a
