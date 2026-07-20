@@ -6,6 +6,8 @@ with VAD, wakes on `Computer`, runs the request in one persistent Codex CLI
 thread, and prints the complete answer. The model produces one canonical
 answer; the spoken text is a short
 verbatim excerpt of that answer rather than a separately generated reply.
+Broker-owned Codex children run without MCP voice tools, so the child cannot
+speak independently before the parent broker plays that excerpt once.
 Follow-up speech stays in the same Codex thread until silence or an
 explicit sleep phrase closes the window.
 

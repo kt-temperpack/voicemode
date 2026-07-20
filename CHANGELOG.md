@@ -28,7 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   audio stay silent. Both `Computer` and `Hey Computer` activate the wake
   parser, including normal trailing punctuation. Each accepted prompt now
   produces one canonical model response; terminal output shows it once and TTS
-  plays one short verbatim excerpt through buffered, single-shot playback.
+  plays one short verbatim excerpt through buffered, single-shot playback. The
+  broker disables MCP voice tools inside child Codex turns, preventing the
+  child and parent from speaking the same answer independently.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

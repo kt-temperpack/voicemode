@@ -24,6 +24,13 @@ class CodexTurn:
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
 
+_BROKER_DEVELOPER_INSTRUCTIONS = (
+    "You are running inside the VoiceMode broker. Return exactly one response through the "
+    "required output schema. Do not call VoiceMode, converse, TTS, Spokenly, or any audio "
+    "tool; the parent broker exclusively owns audio playback."
+)
+
+
 _RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -85,6 +92,10 @@ class CodexAdapter:
             self.model,
             "--config",
             f'model_reasoning_effort="{self.reasoning_effort}"',
+            "--config",
+            "mcp_servers={}",
+            "--config",
+            f"developer_instructions={json.dumps(_BROKER_DEVELOPER_INSTRUCTIONS)}",
             "--json",
             "--output-schema",
             str(schema_path),
