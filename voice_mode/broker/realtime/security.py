@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+import secrets
+import socket
 from pathlib import Path
-from typing import Final
+from typing import Final, Mapping
 from urllib.parse import urlsplit
 
 from ..hosts.selection import canonical_repo_root
@@ -15,6 +17,14 @@ MIN_CAPABILITY_TOKEN_BYTES: Final[int] = 24
 MAX_CAPABILITY_TOKEN_BYTES: Final[int] = 128
 MAX_PUBLIC_ERROR_BYTES: Final[int] = 2048
 MAX_PUBLIC_ERROR_INPUT_BYTES: Final[int] = MAX_PUBLIC_ERROR_BYTES * 4
+MAX_HEADER_BYTES: Final[int] = 4096
+FORWARDED_HEADER_NAMES: Final[tuple[str, ...]] = (
+    "Forwarded",
+    "X-Forwarded-For",
+    "X-Forwarded-Host",
+    "X-Forwarded-Port",
+    "X-Forwarded-Proto",
+)
 
 CAPABILITY_TOKEN_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9._~-]+$")
 PRIVATE_CALL_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"\brtc_[A-Za-z0-9_-]{1,128}\b")
@@ -124,6 +134,24 @@ def validate_capability_token(token: str) -> str:
     return token
 
 
+def generate_capability_token(*, num_bytes: int = 32) -> str:
+    if isinstance(num_bytes, bool) or not isinstance(num_bytes, int):
+        raise TypeError("num_bytes must be an integer")
+    if num_bytes < MIN_CAPABILITY_TOKEN_BYTES:
+        raise ValueError(
+            f"num_bytes must be at least {MIN_CAPABILITY_TOKEN_BYTES} bytes"
+        )
+    token = secrets.token_urlsafe(num_bytes)
+    return validate_capability_token(token)
+
+
+def compare_capability_token(expected: str, observed: str) -> bool:
+    return secrets.compare_digest(
+        validate_capability_token(expected),
+        validate_capability_token(observed),
+    )
+
+
 def validate_private_call_id(call_id: str) -> str:
     ensure_bounded_bytes(call_id, label="private realtime call ID", max_bytes=128)
     if PRIVATE_CALL_ID_FULL_PATTERN.fullmatch(call_id) is None:
@@ -139,6 +167,35 @@ def canonical_allowed_repo_root(candidate: str | Path) -> str:
     if not Path(canonical).is_absolute():
         raise ValueError("repository root must canonicalize to an absolute path")
     return canonical
+
+
+def validate_forwarded_headers(headers: Mapping[str, str]) -> None:
+    for name in FORWARDED_HEADER_NAMES:
+        value = headers.get(name)
+        if value:
+            ensure_bounded_bytes(value, label=name, max_bytes=MAX_HEADER_BYTES)
+            raise ValueError("forwarding headers are not allowed on the loopback server")
+
+
+def extract_bearer_token(header_value: str) -> str:
+    ensure_bounded_bytes(header_value, label="authorization header", max_bytes=MAX_HEADER_BYTES)
+    scheme, separator, token = header_value.partition(" ")
+    if separator != " " or scheme.lower() != "bearer":
+        raise ValueError("authorization header must use Bearer")
+    return validate_capability_token(token)
+
+
+def validate_loopback_socket_binding(bound_socket: socket.socket) -> tuple[str, int]:
+    if not isinstance(bound_socket, socket.socket):
+        raise TypeError("bound_socket must be a socket")
+    if bound_socket.family != socket.AF_INET:
+        raise ValueError("loopback server requires an IPv4 TCP socket")
+    sockname = bound_socket.getsockname()
+    if not isinstance(sockname, tuple) or len(sockname) < 2:
+        raise ValueError("socket binding must expose an IPv4 host and port")
+    host = validate_loopback_bind_host(str(sockname[0]))
+    port = validate_port(int(sockname[1]), allow_zero=True)
+    return host, port
 
 
 def redact_public_error_text(text: str, *, private_values: tuple[str, ...] = ()) -> str:
