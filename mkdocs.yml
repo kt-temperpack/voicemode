@@ -100,6 +100,7 @@ nav:
     - Kokoro TTS: guides/kokoro-setup.md
   - Reference:
     - CLI Commands: reference/cli.md
+    - Conversation Broker: reference/broker.md
     - Service Commands: reference/cli/service-commands.md
     - Control Channel: reference/control-channel.md
     - Converse Parameters: reference/converse-parameters.md

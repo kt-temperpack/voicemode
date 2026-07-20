@@ -196,6 +196,19 @@ media-key / keyword examples.
 | `VOICEMODE_CONTROL_SOCKET` | Path to the control Unix domain socket | `~/.voicemode/control.sock` | `/tmp/vm-control.sock` |
 | `VOICEMODE_HISTORY_BUFFER_SIZE` | How many recent utterances `skip_back` can replay (history ring-buffer depth, ≥1) | `8` | `16` |
 
+### Conversation Broker
+
+These settings control the experimental foreground conversation broker. See the
+[Conversation Broker reference](broker.md) for its current audio-free scope.
+
+| Variable | Description | Default | Example |
+|----------|-------------|---------|---------|
+| `VOICEMODE_BROKER_SOCKET` | Path to the broker Unix socket | `~/.voicemode/broker.sock` | `/tmp/voicemode-broker.sock` |
+| `VOICEMODE_BROKER_MAX_MESSAGE_BYTES` | Maximum request size, clamped to 4,096-1,048,576 bytes | `65536` | `131072` |
+| `VOICEMODE_BROKER_READ_TIMEOUT_SECONDS` | Request read timeout, clamped to 0.1-30 seconds | `2.0` | `5.0` |
+| `VOICEMODE_BROKER_WRITE_TIMEOUT_SECONDS` | Response write timeout, clamped to 0.1-30 seconds | `2.0` | `5.0` |
+| `VOICEMODE_BROKER_LONG_POLL_MAX_SECONDS` | Maximum turn wait, clamped to 1-300 seconds | `120` | `60` |
+
 ### Result Widgets
 
 `converse()` results can carry small, non-spoken, agent-facing one-liners in a

@@ -1557,6 +1557,7 @@ from voice_mode.cli_commands import claude as claude_cmd
 from voice_mode.cli_commands import soundfonts as soundfonts_cmd
 from voice_mode.cli_commands import autofocus as autofocus_cmd
 from voice_mode.cli_commands import conch as conch_cmd
+from voice_mode.cli_commands import broker as broker_cmd
 
 # Add exchanges to main CLI
 voice_mode_main_cli.add_command(exchanges_cmd.exchanges)
@@ -1574,6 +1575,9 @@ voice_mode_main_cli.add_command(autofocus_cmd.autofocus)
 
 # Add conch management commands
 voice_mode_main_cli.add_command(conch_cmd.conch)
+
+# Experimental long-lived conversation broker lifecycle.
+voice_mode_main_cli.add_command(broker_cmd.broker)
 
 # Add the /mcp self-reconnect command (VM-1727). Lives in a top-level,
 # MCP-independent module so it imports and runs when the voicemode server is

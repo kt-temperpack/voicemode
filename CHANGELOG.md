@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Experimental local conversation broker core** — `voicemode broker
+  run|status|stop` now provides a foreground, single-session foundation for a
+  future always-available Codex voice loop. The first slice is deliberately
+  audio-free: it adds a strict versioned local protocol, owner-only Unix socket,
+  bounded long polling, privacy-safe lifecycle events, and graceful recovery
+  without persisting utterances or spoken summaries. Wake-word activation,
+  audio adapters, and Codex integration remain future slices.
+
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default
   off) appends the current local time (`HH:MM:SS`) to every `converse()`

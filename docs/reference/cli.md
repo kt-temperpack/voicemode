@@ -21,6 +21,20 @@ Start the MCP server (stdio transport)
 voicemode
 ```
 
+### broker
+
+Run and inspect the experimental local conversation broker. The current broker
+is an audio-free core and always runs in the foreground.
+
+```bash
+voicemode broker run [--socket PATH]
+voicemode broker status [--json] [--socket PATH]
+voicemode broker stop [--socket PATH]
+```
+
+See the [Conversation Broker reference](broker.md) for lifecycle, privacy, and
+recovery behavior.
+
 ### serve
 Start the MCP server with HTTP transport for remote access
 

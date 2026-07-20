@@ -697,6 +697,34 @@ CONTROL_SOCKET_PATH = expand_path(
     os.getenv("VOICEMODE_CONTROL_SOCKET", str(BASE_DIR / "control.sock"))
 )
 
+# Experimental conversation broker. The broker is local-only and foreground
+# only in its first delivery slice.
+BROKER_SOCKET_PATH = expand_path(
+    os.getenv("VOICEMODE_BROKER_SOCKET", str(BASE_DIR / "broker.sock"))
+)
+
+
+def _bounded_env_number(name: str, default, minimum, maximum, cast):
+    try:
+        value = cast(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+BROKER_MAX_MESSAGE_BYTES = _bounded_env_number(
+    "VOICEMODE_BROKER_MAX_MESSAGE_BYTES", 65_536, 4_096, 1_048_576, int
+)
+BROKER_READ_TIMEOUT_SECONDS = _bounded_env_number(
+    "VOICEMODE_BROKER_READ_TIMEOUT_SECONDS", 2.0, 0.1, 30.0, float
+)
+BROKER_WRITE_TIMEOUT_SECONDS = _bounded_env_number(
+    "VOICEMODE_BROKER_WRITE_TIMEOUT_SECONDS", 2.0, 0.1, 30.0, float
+)
+BROKER_LONG_POLL_MAX_SECONDS = _bounded_env_number(
+    "VOICEMODE_BROKER_LONG_POLL_MAX_SECONDS", 120.0, 1.0, 300.0, float
+)
+
 # Hardening (F4 / VM-1697): a `pause` holds the global audio lock while playback
 # waits, so a pause that is never resumed (a forgotten/buggy trigger, or a
 # malicious one) would wedge ALL voice ops for this server. Auto-resolve a pause
