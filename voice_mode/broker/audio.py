@@ -26,6 +26,8 @@ from voice_mode.config import (
 )
 from voice_mode.provider_discovery import is_local_provider
 
+from .endpointing import EndpointDecision, EndpointDetector, FrameMetadata
+
 
 SpeakCallable = Callable[[str, str, float], Awaitable[None]]
 TranscribeCallable = Callable[[np.ndarray], Awaitable[str | None]]
@@ -48,7 +50,7 @@ def _clean_transcript(text: str) -> str | None:
     return cleaned
 
 
-async def _speak_local(message: str, voice: str, speed: float = 1.35) -> None:
+async def _speak_local(message: str, voice: str, speed: float = 1.25) -> None:
     from voice_mode.audio_player import NonBlockingAudioPlayer
     from voice_mode.tools.converse import synthesize_turn_with_failover
 
@@ -112,7 +114,7 @@ class PersistentVoiceAudio:
         voice: str,
         listen_duration: float,
         min_duration: float,
-        speed: float = 1.35,
+        speed: float = 1.25,
         stream_factory=None,
         vad_factory=None,
         speak_callable: SpeakCallable = _speak_local,
@@ -121,6 +123,7 @@ class PersistentVoiceAudio:
         submitted_cue_callable: CueCallable = _play_submitted_cue,
         cues_enabled: bool = AUDIO_FEEDBACK_ENABLED,
         silence_threshold_ms: int = 900,
+        endpoint_sink: Callable[[EndpointDecision], None] | None = None,
     ) -> None:
         self.voice = voice
         self.listen_duration = listen_duration
@@ -134,6 +137,8 @@ class PersistentVoiceAudio:
         self._submitted_cue_callable = submitted_cue_callable
         self._cues_enabled = cues_enabled
         self._silence_threshold_ms = silence_threshold_ms
+        self._endpoint_sink = endpoint_sink
+        self.last_endpoint: EndpointDecision | None = None
         self._queue: queue.Queue[np.ndarray] = queue.Queue()
         self._muted = threading.Event()
         self._muted.set()
@@ -189,9 +194,12 @@ class PersistentVoiceAudio:
         pre_roll = deque(maxlen=max(1, int(500 / VAD_CHUNK_DURATION_MS)))
         chunks: list[np.ndarray] = []
         speech_started = False
-        endpoint_frames = max(1, -(-self._silence_threshold_ms // VAD_CHUNK_DURATION_MS))
-        speech_tail: deque[bool] = deque(maxlen=endpoint_frames)
-        speech_started_at = 0.0
+        detector = EndpointDetector(
+            silence_ms=self._silence_threshold_ms,
+            min_utterance_ms=round(self.min_duration * 1000),
+            max_utterance_ms=round(self.listen_duration * 1000),
+        )
+        self.last_endpoint = None
         deadline = time.monotonic() + self.listen_duration
         self._muted.clear()
         try:
@@ -205,24 +213,29 @@ class PersistentVoiceAudio:
                 try:
                     is_speech = vad.is_speech(resampled.tobytes(), 16000)
                 except Exception:
-                    is_speech = True
+                    is_speech = None
+                rms = float(np.sqrt(np.mean(np.square(chunk.astype(np.float64)))))
+                decision = detector.feed(
+                    FrameMetadata(
+                        duration_ms=VAD_CHUNK_DURATION_MS,
+                        rms=rms,
+                        vad_speech=is_speech,
+                    )
+                )
 
                 if not speech_started:
                     pre_roll.append(chunk)
-                    if not is_speech:
+                    if not detector.speech_started:
                         continue
                     speech_started = True
-                    speech_started_at = time.monotonic()
                     chunks.extend(pre_roll)
-                    speech_tail.clear()
                     continue
 
                 chunks.append(chunk)
-                speech_tail.append(is_speech)
-                speech_seconds = time.monotonic() - speech_started_at
-                if speech_seconds >= self.min_duration and _speech_tail_is_silent(
-                    speech_tail, endpoint_frames
-                ):
+                if decision.ended:
+                    self.last_endpoint = decision
+                    if self._endpoint_sink is not None:
+                        self._endpoint_sink(decision)
                     break
         finally:
             self._muted.set()

@@ -39,8 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   starts speaking.
   Broker speech now defaults to 1.25x speed, and brief acknowledgments such as
   `nice` or `thanks` close the follow-up window without generating an extra
-  Codex response. End-of-speech detection now tolerates isolated VAD noise in
-  the trailing silence window instead of waiting until the full listen timeout.
+  Codex response. End-of-speech detection now combines adaptive noise-floor
+  tracking, VAD voting, bounded mostly-silent tails, and explicit endpoint
+  reasons, so fan noise and isolated VAD spikes don't hold the microphone open
+  while natural pauses and clipped word endings remain intact.
   Host dispatch is journaled before submission, app-server disconnects recover
   by correlating the original request instead of replaying it, and the exec
   fallback is labeled as a separate Codex child before listening begins.

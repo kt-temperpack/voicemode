@@ -1,4 +1,5 @@
 from collections import deque
+import queue
 
 import numpy as np
 import pytest
@@ -12,6 +13,7 @@ from voice_mode.broker.audio import (
     _speech_tail_is_silent,
     _speak_local,
 )
+from voice_mode.broker.endpointing import EndpointReason
 
 
 class FakeStream:
@@ -29,6 +31,28 @@ class FakeStream:
 
     def close(self):
         self.closes += 1
+
+
+class ScriptedQueue:
+    def __init__(self, chunks):
+        self.chunks = deque(chunks)
+
+    def get_nowait(self):
+        raise queue.Empty
+
+    def get(self, *, timeout):
+        del timeout
+        if not self.chunks:
+            raise queue.Empty
+        return self.chunks.popleft()
+
+
+class ScriptedVad:
+    def __init__(self, decisions):
+        self.decisions = iter(decisions)
+
+    def is_speech(self, _audio, _sample_rate):
+        return next(self.decisions)
 
 
 def test_blank_audio_markers_are_not_turns():
@@ -134,8 +158,8 @@ async def test_stream_stays_open_across_speak_and_listen(monkeypatch):
     assert len(streams) == 1
     assert streams[0].starts == streams[0].stops == streams[0].closes == 1
     assert spoken == [
-        ("answer", "am_michael", 1.35),
-        ("follow up", "am_michael", 1.35),
+        ("answer", "am_michael", 1.25),
+        ("follow up", "am_michael", 1.25),
     ]
     assert len(transcribed) == 2
 
@@ -241,6 +265,41 @@ def test_callback_discards_audio_while_muted():
     audio._muted.clear()
     audio._callback(chunk, 10, None, None)
     assert np.array_equal(audio._queue.get_nowait(), chunk)
+
+
+def test_capture_publishes_the_endpoint_reason_and_timing():
+    speech_frames = 12
+    silence_frames = 30
+    frame_samples = int(audio_module.SAMPLE_RATE * audio_module.VAD_CHUNK_DURATION_MS / 1000)
+    chunks = [
+        np.full((frame_samples, 1), 1200, dtype=np.int16)
+        for _ in range(speech_frames)
+    ]
+    chunks += [
+        np.zeros((frame_samples, 1), dtype=np.int16)
+        for _ in range(silence_frames)
+    ]
+    endpoints = []
+    audio = PersistentVoiceAudio(
+        voice="am_michael",
+        listen_duration=5,
+        min_duration=0.3,
+        stream_factory=lambda **_kwargs: FakeStream(),
+        vad_factory=lambda _aggressiveness: ScriptedVad(
+            [True] * speech_frames + [False] * silence_frames
+        ),
+        endpoint_sink=endpoints.append,
+    )
+    audio._queue = ScriptedQueue(chunks)
+
+    captured = audio._capture_utterance()
+
+    assert captured is not None
+    assert audio.last_endpoint is endpoints[0]
+    assert audio.last_endpoint.reason is EndpointReason.SILENCE
+    assert audio.last_endpoint.trailing_silence_ms >= 810
+    assert audio.last_endpoint.elapsed_ms < 1_500
+    audio.close()
 
 
 @pytest.mark.asyncio
