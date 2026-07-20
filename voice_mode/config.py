@@ -736,6 +736,8 @@ BROKER_MIN_LISTEN_DURATION_SECONDS = _bounded_env_number(
 BROKER_SILENCE_THRESHOLD_MS = _bounded_env_number(
     "VOICEMODE_BROKER_SILENCE_THRESHOLD_MS", 900, 250, 3_000, int
 )
+BROKER_HOTKEY = os.getenv("VOICEMODE_BROKER_HOTKEY", "").strip() or None
+BROKER_TERMINAL_KEYS = env_bool("VOICEMODE_BROKER_TERMINAL_KEYS", True)
 BROKER_CODEX_EXECUTABLE = os.getenv("VOICEMODE_BROKER_CODEX_EXECUTABLE", "codex").strip() or "codex"
 BROKER_CODEX_SANDBOX = os.getenv("VOICEMODE_BROKER_CODEX_SANDBOX", "workspace-write").strip()
 if BROKER_CODEX_SANDBOX not in {"read-only", "workspace-write", "danger-full-access"}:

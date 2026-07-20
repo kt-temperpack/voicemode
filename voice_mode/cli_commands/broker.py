@@ -17,10 +17,12 @@ from voice_mode.config import (
     BROKER_CODEX_REASONING_EFFORT,
     BROKER_CODEX_SANDBOX,
     BROKER_CODEX_THREAD_ID,
+    BROKER_HOTKEY,
     BROKER_LISTEN_DURATION_SECONDS,
     BROKER_MIN_LISTEN_DURATION_SECONDS,
     BROKER_SILENCE_THRESHOLD_MS,
     BROKER_SOCKET_PATH,
+    BROKER_TERMINAL_KEYS,
     BROKER_VOICE,
     BROKER_VOICE_SPEED,
     BROKER_WAKE_PHRASE,
@@ -55,6 +57,17 @@ def _socket_option(function):
 @click.option("--voice", default=BROKER_VOICE, show_default=True)
 @click.option("--listen-duration", type=float, default=BROKER_LISTEN_DURATION_SECONDS, show_default=True)
 @click.option(
+    "--hotkey",
+    default=BROKER_HOTKEY,
+    help="Optional global push-to-talk chord, for example <ctrl>+<alt>+space.",
+)
+@click.option(
+    "--terminal-keys/--no-terminal-keys",
+    default=BROKER_TERMINAL_KEYS,
+    show_default=True,
+    help="Use space as a foreground push-to-talk toggle; s sleeps and i interrupts.",
+)
+@click.option(
     "--adapter",
     "codex_adapter",
     type=click.Choice(["auto", "app-server", "exec"]),
@@ -80,6 +93,8 @@ def broker_run(
     codex_adapter: str,
     codex_thread_id: str | None,
     new_thread: bool,
+    hotkey: str | None,
+    terminal_keys: bool,
 ):
     """Run hands-free Codex in the foreground."""
     try:
@@ -104,6 +119,8 @@ def broker_run(
                 codex_adapter=codex_adapter,
                 codex_thread_id=codex_thread_id,
                 new_thread=new_thread,
+                hotkey=hotkey,
+                terminal_keys=terminal_keys,
             )
     except (OSError, RuntimeError) as error:
         raise click.ClickException(
@@ -116,6 +133,11 @@ def broker_run(
 @click.option("--wake-phrase", default=BROKER_WAKE_PHRASE, show_default=True)
 @click.option("--voice", default=BROKER_VOICE, show_default=True)
 @click.option("--listen-duration", type=float, default=BROKER_LISTEN_DURATION_SECONDS, show_default=True)
+@click.option("--hotkey", default=BROKER_HOTKEY)
+@click.option(
+    "--terminal-keys/--no-terminal-keys",
+    default=BROKER_TERMINAL_KEYS,
+)
 @click.option(
     "--adapter",
     "codex_adapter",
@@ -135,6 +157,8 @@ def broker_converse(
     codex_adapter: str,
     codex_thread_id: str | None,
     new_thread: bool,
+    hotkey: str | None,
+    terminal_keys: bool,
 ):
     """Explicit alias for the foreground hands-free Codex loop."""
     broker_run.callback(
@@ -147,6 +171,8 @@ def broker_converse(
         codex_adapter=codex_adapter,
         codex_thread_id=codex_thread_id,
         new_thread=new_thread,
+        hotkey=hotkey,
+        terminal_keys=terminal_keys,
     )
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import io
 import queue
+import threading
 import time
 from collections import deque
 from typing import Awaitable, Callable
@@ -161,6 +162,7 @@ class PersistentVoiceAudio:
             device_probe=self._default_input_device if stream_factory is None else None,
         )
         self._muted = self._session.muted
+        self._push_to_talk_release = threading.Event()
 
     def _create_stream(self, **kwargs):
         if self._stream_factory is None:
@@ -191,6 +193,12 @@ class PersistentVoiceAudio:
 
     def reopen_device(self) -> None:
         self._session.reopen()
+
+    def begin_push_to_talk(self) -> None:
+        self._push_to_talk_release.clear()
+
+    def release_push_to_talk(self) -> None:
+        self._push_to_talk_release.set()
 
     def _drain(self) -> None:
         while True:
@@ -232,6 +240,19 @@ class PersistentVoiceAudio:
                 try:
                     chunk = self._queue.get(timeout=0.25).flatten()
                 except queue.Empty:
+                    if self._push_to_talk_release.is_set():
+                        decision = detector.feed(
+                            FrameMetadata(
+                                duration_ms=1,
+                                rms=0,
+                                vad_speech=False,
+                                push_to_talk_released=True,
+                            )
+                        )
+                        self.last_endpoint = decision
+                        if self._endpoint_sink is not None:
+                            self._endpoint_sink(decision)
+                        break
                     if self._session.ensure_device():
                         self._drain()
                         self._session.unmute()
@@ -248,11 +269,17 @@ class PersistentVoiceAudio:
                         duration_ms=VAD_CHUNK_DURATION_MS,
                         rms=rms,
                         vad_speech=is_speech,
+                        push_to_talk_released=self._push_to_talk_release.is_set(),
                     )
                 )
 
                 if not speech_started:
                     pre_roll.append(chunk)
+                    if decision.ended:
+                        self.last_endpoint = decision
+                        if self._endpoint_sink is not None:
+                            self._endpoint_sink(decision)
+                        break
                     if not detector.speech_started:
                         continue
                     speech_started = True
@@ -267,6 +294,7 @@ class PersistentVoiceAudio:
                     break
         finally:
             self._muted.set()
+            self._push_to_talk_release.clear()
             self._drain()
         if not speech_started or not chunks:
             return None

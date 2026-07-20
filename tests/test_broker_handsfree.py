@@ -26,6 +26,7 @@ from voice_mode.broker.handsfree import (
 )
 from voice_mode.broker.codex import CodexTurn
 from voice_mode.broker.runtime import BrokerRuntime
+from voice_mode.broker.activation import ActivationBus, ActivationEvent, ActivationKind
 
 
 class FakeAudio:
@@ -45,6 +46,12 @@ class FakeAudio:
 
     async def cue_submitted(self):
         self.cues.append("submitted")
+
+    def begin_push_to_talk(self):
+        self.cues.append("ptt-press")
+
+    def release_push_to_talk(self):
+        self.cues.append("ptt-release")
 
 
 class FakeCodex:
@@ -366,6 +373,35 @@ async def test_loop_announces_exact_thread_before_first_dispatch(tmp_path):
     assert displayed.count("Codex thread: current-thread") == 1
     assert codex.prompts == ["inspect the repo"]
     assert runtime.snapshot().shutting_down is True
+
+
+@pytest.mark.asyncio
+async def test_push_to_talk_bypasses_wake_phrase_without_touching_codex_adapter(tmp_path):
+    audio = FakeAudio(["inspect directly", "nice", "Computer, exit voice mode"])
+    codex = FakeCodex()
+    codex.thread_id = "current-thread"
+    bus = ActivationBus()
+    loop = HandsFreeLoop(
+        repo_root=tmp_path,
+        runtime=BrokerRuntime(),
+        audio=audio,
+        wake_phrase="Computer",
+        host_adapter=handsfree_module.ExecCodexAdapter(codex),
+        thread_id="current-thread",
+        activation_bus=bus,
+        display=lambda _message: None,
+    )
+    bus.publish(
+        ActivationEvent.now(ActivationKind.PUSH_TO_TALK_PRESS, "test-hotkey")
+    )
+    bus.publish(
+        ActivationEvent.now(ActivationKind.PUSH_TO_TALK_RELEASE, "test-hotkey")
+    )
+
+    await loop.run()
+
+    assert codex.prompts == ["inspect directly"]
+    assert audio.cues[:2] == ["ptt-press", "ptt-release"]
 
 
 @pytest.mark.asyncio

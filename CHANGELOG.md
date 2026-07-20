@@ -52,6 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   One broker-owned audio session now serializes microphone device rotation,
   retries failed reopens with bounded backoff, and cancels buffered speech
   without replaying stale audio or creating a second stream owner.
+  Optional global and foreground terminal push-to-talk controls bypass wake-word
+  uncertainty, with release acting as an exact endpoint and startup conflicts
+  naming the precise `--hotkey` or environment setting to change.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

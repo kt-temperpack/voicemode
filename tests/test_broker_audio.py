@@ -34,8 +34,10 @@ class FakeStream:
 
 
 class ScriptedQueue:
-    def __init__(self, chunks):
+    def __init__(self, chunks, on_get=None):
         self.chunks = deque(chunks)
+        self.on_get = on_get
+        self.gets = 0
 
     def get_nowait(self):
         raise queue.Empty
@@ -44,6 +46,9 @@ class ScriptedQueue:
         del timeout
         if not self.chunks:
             raise queue.Empty
+        self.gets += 1
+        if self.on_get is not None:
+            self.on_get(self.gets)
         return self.chunks.popleft()
 
 
@@ -326,6 +331,34 @@ def test_capture_publishes_the_endpoint_reason_and_timing():
     assert audio.last_endpoint.reason is EndpointReason.SILENCE
     assert audio.last_endpoint.trailing_silence_ms >= 810
     assert audio.last_endpoint.elapsed_ms < 1_500
+    audio.close()
+
+
+def test_push_to_talk_release_is_an_exact_capture_endpoint():
+    frame_samples = int(
+        audio_module.SAMPLE_RATE * audio_module.VAD_CHUNK_DURATION_MS / 1000
+    )
+    chunks = [
+        np.full((frame_samples, 1), 1200, dtype=np.int16) for _ in range(10)
+    ]
+    audio = PersistentVoiceAudio(
+        voice="am_michael",
+        listen_duration=5,
+        min_duration=1,
+        stream_factory=lambda **_kwargs: FakeStream(),
+        vad_factory=lambda _aggressiveness: ScriptedVad([True] * len(chunks)),
+    )
+    audio._queue = ScriptedQueue(
+        chunks,
+        on_get=lambda count: audio.release_push_to_talk() if count == 5 else None,
+    )
+    audio.begin_push_to_talk()
+
+    captured = audio._capture_utterance()
+
+    assert captured is not None
+    assert audio.last_endpoint.reason is EndpointReason.PUSH_TO_TALK_RELEASE
+    assert audio.last_endpoint.elapsed_ms == 150
     audio.close()
 
 

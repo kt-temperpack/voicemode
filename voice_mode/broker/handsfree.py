@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import sys
 import threading
 import time
 import unicodedata
@@ -12,6 +13,13 @@ from pathlib import Path
 from typing import Callable
 
 from .audio import PersistentVoiceAudio
+from .activation import (
+    ActivationBus,
+    ActivationEvent,
+    ActivationKind,
+    ActivationState,
+    reduce_activation,
+)
 from .codex import CodexAdapter, CodexTurnError
 from .hosts import (
     AppServerHostAdapter,
@@ -22,6 +30,7 @@ from .hosts import (
     select_thread,
 )
 from .journal import TurnJournal
+from .hotkey import HotkeyRegistrationError, PlatformHotkeyAdapter, TerminalKeyAdapter
 from .recovery import RecoveryAction, RecoveryCoordinator
 from .runtime import BrokerRuntime
 from .server import create_broker
@@ -219,6 +228,7 @@ class HandsFreeLoop:
         host_adapter: HostAdapter,
         thread_id: str,
         recovery: RecoveryCoordinator | None = None,
+        activation_bus: ActivationBus | None = None,
         display: Callable[[str], None] = print,
     ) -> None:
         self.repo_root = Path(repo_root).resolve()
@@ -238,6 +248,32 @@ class HandsFreeLoop:
             display=lambda text: self.display(f"\nCodex:\n{text}\n"),
             speak=audio.speak,
         )
+        self._activation_lock = threading.Lock()
+        self._activation_state = ActivationState()
+        self._activation_unsubscribe = (
+            activation_bus.subscribe(self._on_activation)
+            if activation_bus is not None
+            else lambda: None
+        )
+
+    def _on_activation(self, event: ActivationEvent) -> None:
+        with self._activation_lock:
+            previous = self._activation_state
+            self._activation_state = reduce_activation(previous, event)
+            current = self._activation_state
+        if event.kind is ActivationKind.PUSH_TO_TALK_PRESS:
+            self.audio.begin_push_to_talk()
+        if current.endpoint_requested and not previous.endpoint_requested:
+            self.audio.release_push_to_talk()
+
+    def _consume_direct_capture(self) -> bool:
+        with self._activation_lock:
+            direct = self._activation_state.direct_capture
+            self._activation_state = ActivationState(
+                toggle_active=self._activation_state.toggle_active,
+                push_to_talk_held=self._activation_state.push_to_talk_held,
+            )
+        return direct
 
     def _close_session(self, session_id: str | None) -> None:
         if session_id is None:
@@ -269,7 +305,11 @@ class HandsFreeLoop:
                 if not heard:
                     continue
                 self.display(f"You: {heard}")
-                pending = wake_command(heard, self.wake_phrase)
+                pending = (
+                    heard
+                    if self._consume_direct_capture()
+                    else wake_command(heard, self.wake_phrase)
+                )
                 if pending is None:
                     continue
                 if not pending:
@@ -408,6 +448,7 @@ class HandsFreeLoop:
             return None
 
     def close(self) -> None:
+        self._activation_unsubscribe()
         self._runner.close()
         self.host_adapter.close()
 
@@ -432,6 +473,8 @@ def run_handsfree_broker(
     codex_adapter: str = "auto",
     codex_thread_id: str | None = None,
     new_thread: bool = False,
+    hotkey: str | None = None,
+    terminal_keys: bool = True,
 ) -> None:
     from voice_mode.config import (
         BROKER_JOURNAL_DIR,
@@ -490,6 +533,7 @@ def run_handsfree_broker(
     server_thread = None
     audio = None
     loop = None
+    activation_adapters = []
     try:
         assert host_adapter is not None and selected_thread_id is not None
         journal = TurnJournal(
@@ -526,6 +570,7 @@ def run_handsfree_broker(
             silence_threshold_ms=silence_threshold_ms,
         )
         audio.start()
+        activation_bus = ActivationBus()
         loop = HandsFreeLoop(
             repo_root=repo_root,
             runtime=runtime,
@@ -534,10 +579,28 @@ def run_handsfree_broker(
             host_adapter=host_adapter,
             thread_id=selected_thread_id,
             recovery=recovery,
+            activation_bus=activation_bus,
         )
+        if hotkey:
+            hotkey_adapter = PlatformHotkeyAdapter(hotkey, activation_bus)
+            try:
+                hotkey_adapter.start()
+            except HotkeyRegistrationError as error:
+                print(f"Hotkey unavailable: {error}")
+                print(f"Wake phrase remains available: {wake_phrase}")
+            else:
+                activation_adapters.append(hotkey_adapter)
+                print(f"Push-to-talk hotkey: {hotkey}")
+        if terminal_keys and sys.stdin.isatty():
+            terminal_adapter = TerminalKeyAdapter(activation_bus)
+            terminal_adapter.start()
+            activation_adapters.append(terminal_adapter)
+            print("Terminal controls: space toggles push-to-talk; s sleeps; i interrupts")
         dispatcher.interrupt_callback = loop.interrupt
         asyncio.run(loop.run())
     finally:
+        for activation_adapter in activation_adapters:
+            activation_adapter.close()
         if loop is not None:
             loop.close()
         if audio is not None:
