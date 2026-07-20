@@ -1,3 +1,5 @@
+import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -90,14 +92,8 @@ async def test_loop_ignores_ambient_then_reuses_codex_for_followup(tmp_path):
     assert "Open it later: codex resume codex-1" in displayed
     assert runtime.snapshot().shutting_down is True
     assert runtime.snapshot().session is None
-    assert audio.cues == [
-        "submitted",
-        "listening",
-        "submitted",
-        "listening",
-        "submitted",
-        "submitted",
-    ]
+    fixture = Path(__file__).parent / "fixtures" / "broker" / "handsfree_cues.json"
+    assert audio.cues == json.loads(fixture.read_text(encoding="utf-8"))
 
 
 @pytest.mark.asyncio
