@@ -9,14 +9,19 @@ import stat
 import threading
 import time
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import fcntl
+
 
 SCHEMA_VERSION = 1
 MAX_RECORD_BYTES = 64 * 1024
+_GROUP_OR_OTHER_BITS = 0o077
+_OWNER_EXECUTE_BIT = 0o100
 
 
 class JournalError(RuntimeError):
@@ -44,6 +49,12 @@ class JournalEvent:
     decision: str | None = None
     reason: str | None = None
     attempt: str | None = None
+    mode: str | None = None
+    job_id: str | None = None
+    realtime_item_id: str | None = None
+    response_id: str | None = None
+    function_call_id: str | None = None
+    worker_delivery_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -67,6 +78,12 @@ class JournalRecord:
     decision: str | None = None
     reason: str | None = None
     attempt: str | None = None
+    mode: str | None = None
+    job_id: str | None = None
+    realtime_item_id: str | None = None
+    response_id: str | None = None
+    function_call_id: str | None = None
+    worker_delivery_id: str | None = None
 
     def payload(self, *, include_transcript: bool) -> dict[str, Any]:
         payload = asdict(self)
@@ -91,11 +108,14 @@ def stable_journal_path(directory: str | Path, session_id: str) -> Path:
 def atomic_append(path: Path, payload: bytes) -> None:
     """Append one pre-buffered record with one O_APPEND write and fsync."""
 
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(path.parent, 0o700)
-    descriptor = os.open(path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+    _ensure_private_directory(path.parent)
+    descriptor = _open_secure_regular_file(
+        path,
+        os.O_APPEND | os.O_CREAT | os.O_WRONLY,
+        0o600,
+        label="journal file",
+    )
     try:
-        os.fchmod(descriptor, 0o600)
         written = os.write(descriptor, payload)
         if written != len(payload):
             raise JournalError("journal append was incomplete")
@@ -143,7 +163,7 @@ class TurnJournal:
         self._writer = writer
         self._retention_scheduler = retention_scheduler
         self._started = self._monotonic()
-        existing = read_journal(self.path)
+        existing = _read_private_journal(self.path)
         self._sequence = existing[-1].sequence if existing else 0
         self._duration_offset_ms = (
             existing[-1].monotonic_duration_ms if existing else 0
@@ -156,42 +176,43 @@ class TurnJournal:
         if not event.event:
             raise ValueError("journal event must not be empty")
         with self._lock:
-            self._sequence += 1
-            now = self._wall_clock()
-            if now.tzinfo is None:
-                now = now.replace(tzinfo=timezone.utc)
-            elapsed_ms = self._duration_offset_ms + max(
-                0, round((self._monotonic() - self._started) * 1000)
-            )
-            record = JournalRecord(
-                schema_version=SCHEMA_VERSION,
-                sequence=self._sequence,
-                occurred_at=now.astimezone(timezone.utc).isoformat(),
-                monotonic_duration_ms=elapsed_ms,
-                **asdict(event),
-            )
-            encoded = (
-                json.dumps(
-                    record.payload(include_transcript=self.include_transcript),
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ).encode("utf-8")
-                + b"\n"
-            )
-            if len(encoded) > MAX_RECORD_BYTES:
-                self._sequence -= 1
-                raise JournalError("journal record exceeds the size limit")
-            try:
+            with _advisory_process_lock(self.path):
+                existing = _read_private_journal(self.path)
+                previous = existing[-1] if existing else None
+                sequence = 1 if previous is None else previous.sequence + 1
+                now = self._wall_clock()
+                if now.tzinfo is None:
+                    now = now.replace(tzinfo=timezone.utc)
+                elapsed_ms = max(0, round((self._monotonic() - self._started) * 1000))
+                duration = max(
+                    self._duration_offset_ms + elapsed_ms,
+                    0 if previous is None else previous.monotonic_duration_ms,
+                )
+                record = JournalRecord(
+                    schema_version=SCHEMA_VERSION,
+                    sequence=sequence,
+                    occurred_at=now.astimezone(timezone.utc).isoformat(),
+                    monotonic_duration_ms=duration,
+                    **asdict(event),
+                )
+                encoded = (
+                    json.dumps(
+                        record.payload(include_transcript=self.include_transcript),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        sort_keys=True,
+                    ).encode("utf-8")
+                    + b"\n"
+                )
+                if len(encoded) > MAX_RECORD_BYTES:
+                    raise JournalError("journal record exceeds the size limit")
                 self._writer(self.path, encoded)
-            except BaseException:
-                self._sequence -= 1
-                raise
+                self._sequence = record.sequence
         self._schedule_retention()
         return record
 
     def read(self) -> tuple[JournalRecord, ...]:
-        return read_journal(self.path)
+        return _read_private_journal(self.path)
 
     def _schedule_retention(self) -> None:
         with self._retention_lock:
@@ -214,7 +235,7 @@ class TurnJournal:
 
     def _enforce_retention(self) -> None:
         try:
-            self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            _ensure_private_directory(self.directory)
             candidates = []
             for path in self.directory.glob("session-*.jsonl"):
                 metadata = path.lstat()
@@ -230,7 +251,15 @@ class TurnJournal:
                 if keep or path == self.path:
                     retained_bytes += size
                     continue
-                path.unlink(missing_ok=True)
+                try:
+                    with _advisory_process_lock(path, blocking=False):
+                        metadata = path.lstat()
+                        if not stat.S_ISREG(metadata.st_mode):
+                            continue
+                        _validate_removable_file_metadata(metadata, label="journal file")
+                        path.unlink(missing_ok=True)
+                except (BlockingIOError, FileNotFoundError, JournalError):
+                    continue
         except OSError:
             return
 
@@ -313,3 +342,124 @@ def _parse_record(payload: Any, line_number: int) -> JournalRecord:
         if value is not None and not isinstance(value, str):
             raise JournalCorruption(f"journal record {line_number} has an invalid {name}")
     return JournalRecord(**payload)
+
+
+def _current_uid() -> int | None:
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        return None
+    return int(getuid())
+
+
+def _lock_path_for(path: Path) -> Path:
+    return path.with_suffix(path.suffix + ".lock")
+
+
+@contextmanager
+def _advisory_process_lock(path: Path, *, blocking: bool = True):
+    _ensure_private_directory(path.parent)
+    descriptor = _open_secure_regular_file(
+        _lock_path_for(path),
+        os.O_CREAT | os.O_RDWR,
+        0o600,
+        label="journal lock file",
+    )
+    operation = fcntl.LOCK_EX
+    if not blocking:
+        operation |= fcntl.LOCK_NB
+    try:
+        fcntl.flock(descriptor, operation)
+        yield
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def _ensure_private_directory(path: Path) -> None:
+    existed = path.exists()
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    metadata = path.lstat()
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise JournalError("journal directory must be a directory")
+    _validate_owner(metadata, label="journal directory")
+    mode = stat.S_IMODE(metadata.st_mode)
+    if mode & _GROUP_OR_OTHER_BITS:
+        raise JournalError("journal directory permissions are too broad")
+    if not existed and mode != 0o700:
+        os.chmod(path, 0o700)
+
+
+def _open_secure_regular_file(
+    path: Path,
+    flags: int,
+    mode: int,
+    *,
+    label: str,
+) -> int:
+    metadata_before = _try_lstat(path)
+    if metadata_before is not None:
+        _validate_private_file_metadata(metadata_before, label=label)
+    open_flags = flags | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, open_flags, mode)
+    except OSError as error:
+        raise JournalError(f"{label} could not be opened safely") from error
+    try:
+        metadata = os.fstat(descriptor)
+        _validate_private_file_metadata(metadata, label=label)
+        if (
+            metadata_before is not None
+            and (metadata.st_dev, metadata.st_ino)
+            != (metadata_before.st_dev, metadata_before.st_ino)
+        ):
+            raise JournalError(f"{label} changed while it was being opened")
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _read_private_journal(path: Path) -> tuple[JournalRecord, ...]:
+    metadata = _try_lstat(path)
+    if metadata is None:
+        return ()
+    _validate_private_file_metadata(metadata, label="journal file")
+    return read_journal(path)
+
+
+def _try_lstat(path: Path) -> os.stat_result | None:
+    try:
+        return path.lstat()
+    except FileNotFoundError:
+        return None
+
+
+def _validate_private_file_metadata(
+    metadata: os.stat_result,
+    *,
+    label: str,
+) -> None:
+    if not stat.S_ISREG(metadata.st_mode):
+        raise JournalError(f"{label} must be a regular file")
+    _validate_owner(metadata, label=label)
+    mode = stat.S_IMODE(metadata.st_mode)
+    if mode & (_GROUP_OR_OTHER_BITS | _OWNER_EXECUTE_BIT):
+        raise JournalError(f"{label} permissions are too broad")
+
+
+def _validate_removable_file_metadata(
+    metadata: os.stat_result,
+    *,
+    label: str,
+) -> None:
+    if not stat.S_ISREG(metadata.st_mode):
+        raise JournalError(f"{label} must be a regular file")
+    _validate_owner(metadata, label=label)
+
+
+def _validate_owner(metadata: os.stat_result, *, label: str) -> None:
+    expected_uid = _current_uid()
+    if expected_uid is None:
+        return
+    if metadata.st_uid != expected_uid:
+        raise JournalError(f"{label} is not owned by the current user")
