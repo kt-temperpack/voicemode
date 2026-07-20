@@ -77,6 +77,52 @@ class TurnIntent(str, Enum):
     START_TTS = "start_tts"
 
 
+class HostCapability(str, Enum):
+    LIST_THREADS = "list_threads"
+    READ_THREAD = "read_thread"
+    ATTACH_THREAD = "attach_thread"
+    CREATE_THREAD = "create_thread"
+    START_TURN = "start_turn"
+    STEER_TURN = "steer_turn"
+    INTERRUPT_TURN = "interrupt_turn"
+    SUBSCRIBE_EVENTS = "subscribe_events"
+    QUERY_DISPOSITION = "query_disposition"
+
+
+class HostTurnState(str, Enum):
+    STARTED = "started"
+    STEERED = "steered"
+    WAITING_APPROVAL = "waiting_approval"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
+class HostDisposition(str, Enum):
+    ABSENT = "absent"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+    UNCERTAIN = "uncertain"
+
+
+class HostEventKind(str, Enum):
+    TURN_STARTED = "turn_started"
+    TURN_COMPLETED = "turn_completed"
+    APPROVAL_REQUIRED = "approval_required"
+    TURN_CANCELLED = "turn_cancelled"
+    TRANSPORT_LOST = "transport_lost"
+
+
+class HostErrorKind(str, Enum):
+    UNSUPPORTED = "unsupported"
+    UNAVAILABLE = "unavailable"
+    AMBIGUOUS = "ambiguous"
+    RETRYABLE_TRANSPORT = "retryable_transport"
+    HOST_REJECTION = "host_rejection"
+    APPROVAL_REQUIRED = "approval_required"
+    TERMINAL_AGENT_FAILURE = "terminal_agent_failure"
+
+
 class ResultKind(str, Enum):
     STATUS = "status"
     SESSION = "session"
@@ -156,6 +202,74 @@ class CanonicalResponse:
     spoken_text: str
     host_turn_id: str
     completed_at: datetime
+
+
+@dataclass(frozen=True)
+class HostProbe:
+    adapter: str
+    available: bool
+    capabilities: frozenset[HostCapability]
+    version: str | None = None
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class HostThreadSummary:
+    thread_id: str
+    repo_root: str
+    title: str | None = None
+    updated_at: datetime | None = None
+    active: bool = False
+    broker_owned: bool = False
+
+
+@dataclass(frozen=True)
+class HostTurn:
+    request_id: str
+    thread_id: str
+    host_turn_id: str
+    state: HostTurnState
+
+
+@dataclass(frozen=True)
+class HostCompletion:
+    request_id: str
+    thread_id: str
+    host_turn_id: str
+    display_text: str
+    spoken_text: str
+    completed_at: datetime
+
+    def canonical_response(self) -> CanonicalResponse:
+        return CanonicalResponse(
+            schema_version=1,
+            request_id=self.request_id,
+            thread_id=self.thread_id,
+            display_text=self.display_text,
+            spoken_text=self.spoken_text,
+            host_turn_id=self.host_turn_id,
+            completed_at=self.completed_at,
+        )
+
+
+@dataclass(frozen=True)
+class HostApprovalRequest:
+    request_id: str
+    thread_id: str
+    host_turn_id: str
+    approval_id: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class HostEvent:
+    kind: HostEventKind
+    request_id: str | None
+    thread_id: str | None
+    host_turn_id: str | None = None
+    completion: HostCompletion | None = None
+    approval: HostApprovalRequest | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True)
