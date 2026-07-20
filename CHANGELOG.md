@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plays one short verbatim excerpt through buffered, single-shot playback. The
   broker disables MCP voice tools inside child Codex turns, preventing the
   child and parent from speaking the same answer independently.
+  Wake parsing now normalizes Unicode punctuation and zero-width prefixes, and
+  the terminal confirms both wake acceptance and Codex submission so a dropped
+  transition is immediately visible.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

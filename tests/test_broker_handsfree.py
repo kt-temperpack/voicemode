@@ -45,6 +45,8 @@ def test_wake_and_control_parsing_is_strict():
     assert wake_command("hey, computer", "Computer") == ""
     assert wake_command("Hey computer.", "Computer") == ""
     assert wake_command("Hey computer! Check tests", "Computer") == "Check tests"
+    assert wake_command("\u200bHey computer—check tests", "Computer") == "check tests"
+    assert wake_command("Hey computer… check tests", "Computer") == "check tests"
     assert wake_command("computer", "Computer") == ""
     assert wake_command("computerized", "Computer") is None
     assert wake_command("my computer is slow", "Computer") is None

@@ -16,6 +16,9 @@ The microphone is always listening for the wake phrase. After a standalone
 falling cue confirms that the completed request was submitted. The same pair
 brackets follow-up turns. Idle windows, ambient speech, and blank audio stay
 silent. Set `VOICEMODE_AUDIO_FEEDBACK=false` to disable both cues.
+Common terminal punctuation, Unicode dashes/ellipsis, and invisible transcript
+prefixes are normalized before wake matching. The terminal prints explicit
+`Wake accepted` and `Request accepted` transitions before Codex starts.
 
 ## Run and inspect it
 

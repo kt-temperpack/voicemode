@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import re
 import threading
+import unicodedata
 from pathlib import Path
 from typing import Callable
 
@@ -19,12 +20,17 @@ EXIT_PHRASES = {"exit voice mode", "quit voice mode", "goodbye", "shut down"}
 
 
 def wake_command(text: str, wake_phrase: str) -> str | None:
-    match = re.match(
-        rf"^\s*(?:hey[\s,]+)?{re.escape(wake_phrase)}(?:\s*[,;:.!?\-]\s*|\s+|$)(.*?)\s*$",
-        text,
-        flags=re.IGNORECASE,
-    )
-    return match.group(1).strip() if match else None
+    normalized = unicodedata.normalize("NFKC", text).strip().lstrip("\ufeff\u200b")
+    hey_match = re.match(r"^hey\b", normalized, flags=re.IGNORECASE)
+    if hey_match:
+        normalized = normalized[hey_match.end() :].lstrip(" \t,;:.!?…—–-")
+
+    if not normalized.casefold().startswith(wake_phrase.casefold()):
+        return None
+    remainder = normalized[len(wake_phrase) :]
+    if remainder and remainder[0].isalnum():
+        return None
+    return remainder.lstrip(" \t,;:.!?…—–-").strip()
 
 
 def control_intent(text: str) -> str | None:
@@ -83,11 +89,13 @@ class HandsFreeLoop:
                 if pending is None:
                     continue
                 if not pending:
+                    self.display("Wake accepted; listening for your request…")
                     await self.audio.cue_listening()
                     pending = await self._listen_safely()
                     if not pending:
                         continue
                     self.display(f"You: {pending}")
+                self.display("Request accepted; submitting to Codex…")
                 await self.audio.cue_submitted()
                 if control_intent(pending) == "exit":
                     await self.audio.speak("Hands-free Codex is stopping.")
