@@ -63,6 +63,28 @@ class TestProviderResilience:
         assert detect_provider_type("https://api.example.com/v1") == "unknown"
 
     @pytest.mark.asyncio
+    async def test_discovery_closes_openai_client_before_returning(self, monkeypatch):
+        closed = []
+
+        class FakeModels:
+            async def list(self):
+                return type("ModelList", (), {"data": []})()
+
+        class FakeClient:
+            def __init__(self, **_kwargs):
+                self.models = FakeModels()
+
+            async def close(self):
+                closed.append(True)
+
+        monkeypatch.setattr(provider_discovery, "AsyncOpenAI", FakeClient)
+        registry = ProviderRegistry()
+
+        await registry._discover_endpoint("tts", "https://api.openai.com/v1")
+
+        assert closed == [True]
+
+    @pytest.mark.asyncio
     async def test_mark_failed_records_error(self):
         """Test that mark_failed records error information without preventing retry."""
         registry = ProviderRegistry()

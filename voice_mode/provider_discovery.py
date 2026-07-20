@@ -230,6 +230,7 @@ class ProviderRegistry:
             )
             return
 
+        client: AsyncOpenAI | None = None
         try:
             # Create OpenAI client for the endpoint
             client = AsyncOpenAI(
@@ -303,6 +304,20 @@ class ProviderRegistry:
                 last_check=datetime.now(timezone.utc).isoformat(),
                 last_error=str(e)
             )
+        finally:
+            # AsyncOpenAI owns an httpx connection pool.  Finish closing it
+            # before probe_compatibility returns and asyncio.run tears down its
+            # event loop; scheduling close from object finalizers after that
+            # point produces noisy "Event loop is closed" task exceptions.
+            if client is not None:
+                try:
+                    await client.close()
+                except Exception as close_error:
+                    logger.debug(
+                        "Could not close provider client for %s: %s",
+                        base_url,
+                        close_error,
+                    )
     
     async def _discover_voices(self, base_url: str, client: AsyncOpenAI) -> List[str]:
         """Discover available voices for a TTS endpoint."""

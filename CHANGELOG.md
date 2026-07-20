@@ -71,6 +71,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Wake recognition now accepts Whisper's punctuated `A computer.` rendering of
   `Hey Computer` without accepting ordinary `A computer can...` sentences, and
   rejected ambient transcripts explicitly say they were not submitted.
+  Startup provider probes now close their HTTP clients before tearing down the
+  event loop, eliminating misleading `Event loop is closed` tracebacks from
+  the visible broker transcript.
   Canonical `voicemode start`, `voicemode stop`, and `voicemode restart`
   commands now control that service with deterministic human and JSON output,
   stable exit categories, and exact corrections for common command mistakes;
