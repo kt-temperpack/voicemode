@@ -166,9 +166,11 @@ class BrokerClient:
                 "pending_turn_limit",
                 "audio_enabled",
             }
+            allowed = expected | {"compatibility"}
             if (
                 not isinstance(capabilities, dict)
-                or set(capabilities) != expected
+                or not expected.issubset(capabilities)
+                or not set(capabilities).issubset(allowed)
                 or capabilities["protocol_versions"] != [1, 2]
                 or not isinstance(capabilities["operations"], list)
                 or capabilities["pending_turn_limit"] != 1

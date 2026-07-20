@@ -76,6 +76,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   local speech-provider health, and live Codex method capabilities before audio
   capture. Hard incompatibilities return one recovery command, safe fallbacks
   are labeled as degraded, and the redacted result is exposed in broker status.
+  Broker status now projects phase, queue, audio, provider, adapter, thread,
+  request, and recoverable-error state into deterministic privacy-safe JSON;
+  `voicemode broker capabilities --json` publishes stable feature, command,
+  environment-key, protocol, and exit-code contracts for agents and scripts.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

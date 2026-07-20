@@ -4,7 +4,6 @@ Shows complete state of VoiceMode - how it's running, which services are availab
 and their configuration in a single view.
 """
 
-import asyncio
 import json
 import os
 import platform
@@ -14,7 +13,7 @@ import time
 from dataclasses import dataclass, asdict
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Optional
 
 import click
 
@@ -25,7 +24,7 @@ from voice_mode.config import (
     OPENAI_API_KEY,
     env_bool,
 )
-from voice_mode.utils.services.common import find_process_by_port, check_service_status
+from voice_mode.utils.services.common import check_service_status
 
 
 class ServiceStatus(str, Enum):
@@ -442,8 +441,26 @@ def collect_status_data() -> Dict[str, Any]:
     # Get config
     config = get_config_info()
 
+    from voice_mode.broker import BrokerError
+    from voice_mode.broker.client import BrokerClient, BrokerUnavailable
+    from voice_mode.broker.diagnostics import status_document
+    from voice_mode.broker.protocol import LATEST_PROTOCOL_VERSION
+
+    try:
+        broker = status_document(
+            BrokerClient(protocol_version=LATEST_PROTOCOL_VERSION).status()
+        )
+    except (BrokerUnavailable, BrokerError):
+        broker = {
+            "schema_version": 1,
+            "health": "stopped",
+            "supervisor": {"state": "unknown"},
+            "broker": {"phase": "stopped", "queue_depth": 0},
+        }
+
     return {
         "version": __version__,
+        "broker": broker,
         "runtime": {
             "mode": "mcp",
             "command": "uvx voice-mode"
@@ -697,7 +714,10 @@ def format_json_output(data: Dict[str, Any]) -> str:
     """Format status data as JSON."""
     # Remove internal raw data for cleaner output
     output = {k: v for k, v in data.items() if not k.startswith("_")}
-    return json.dumps(output, indent=2)
+    config = output.get("config")
+    if isinstance(config, dict) and config.get("file"):
+        output["config"] = {**config, "file": Path(config["file"]).name}
+    return json.dumps(output, indent=2, sort_keys=True)
 
 
 @click.command()

@@ -1,3 +1,5 @@
+import json
+
 from click.testing import CliRunner
 
 from voice_mode.cli import voice_mode_main_cli
@@ -78,6 +80,25 @@ def test_status_requests_latest_capabilities_protocol(monkeypatch):
 
     assert result.exit_code == 0
     assert selected == [LATEST_PROTOCOL_VERSION]
+
+
+def test_capabilities_json_is_deterministic_and_machine_clean(monkeypatch):
+    payload = {
+        "capabilities": {
+            "protocol_versions": [1, 2],
+            "compatibility": {"disposition": "supported"},
+        }
+    }
+    monkeypatch.setattr(broker_module.BrokerClient, "status", lambda self: payload)
+    runner = CliRunner()
+
+    first = runner.invoke(voice_mode_main_cli, ["broker", "capabilities", "--json"])
+    second = runner.invoke(voice_mode_main_cli, ["broker", "capabilities", "--json"])
+
+    assert first.exit_code == 0
+    assert first.stderr == ""
+    assert first.output == second.output
+    assert json.loads(first.output)["schema_version"] == 1
 
 
 def test_run_maps_bind_failure(monkeypatch, tmp_path):

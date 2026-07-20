@@ -10,6 +10,7 @@ import click
 from voice_mode.broker import BrokerError
 from voice_mode.broker.client import BrokerClient, BrokerUnavailable
 from voice_mode.broker.protocol import LATEST_PROTOCOL_VERSION
+from voice_mode.broker.diagnostics import capabilities_document, status_document
 from voice_mode.broker.server import run_broker
 from voice_mode.config import (
     BROKER_CODEX_EXECUTABLE,
@@ -202,7 +203,7 @@ def broker_status(as_json: bool, socket_path: Path):
         raise click.ClickException(str(error)) from error
 
     if as_json:
-        click.echo(json.dumps(result, indent=2, sort_keys=True))
+        click.echo(json.dumps(status_document(result), sort_keys=True))
         return
     session = result["session"]
     click.echo(f"Broker is running: {result['state']}")
@@ -231,3 +232,24 @@ def broker_stop(socket_path: Path):
     except BrokerError as error:
         raise click.ClickException(str(error)) from error
     click.echo("Broker is stopping")
+
+
+@broker.command("capabilities")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+@_socket_option
+def broker_capabilities(as_json: bool, socket_path: Path):
+    """Show stable broker features, commands, and automation contracts."""
+    try:
+        result = BrokerClient(
+            socket_path, protocol_version=LATEST_PROTOCOL_VERSION
+        ).status()
+    except BrokerUnavailable:
+        raise click.ClickException("broker is not running; run: voicemode start") from None
+    document = capabilities_document(result.get("capabilities"))
+    if as_json:
+        click.echo(json.dumps(document, sort_keys=True))
+        return
+    click.echo(f"Broker capabilities schema v{document['schema_version']}")
+    for name, enabled in document["features"].items():
+        if enabled:
+            click.echo(name)
