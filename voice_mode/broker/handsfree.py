@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 from typing import Callable
 
-from .audio import VoiceAudio
+from .audio import PersistentVoiceAudio
 from .codex import CodexAdapter, CodexTurnError
 from .runtime import BrokerRuntime
 from .server import create_broker
@@ -42,7 +42,7 @@ class HandsFreeLoop:
         *,
         repo_root: Path,
         runtime: BrokerRuntime,
-        audio: VoiceAudio,
+        audio: PersistentVoiceAudio,
         wake_phrase: str,
         codex_factory: Callable[[Path], CodexAdapter],
         display: Callable[[str], None] = print,
@@ -54,6 +54,7 @@ class HandsFreeLoop:
         self.codex_factory = codex_factory
         self.display = display
         self._codex: CodexAdapter | None = None
+        self._shown_codex_thread: str | None = None
 
     def _close_session(self, session_id: str | None) -> None:
         if session_id is None:
@@ -128,6 +129,11 @@ class HandsFreeLoop:
             if self.runtime.snapshot().shutting_down:
                 return
 
+            self.runtime.attach_codex_thread(session_id, turn.thread_id)
+            if turn.thread_id != self._shown_codex_thread:
+                self._shown_codex_thread = turn.thread_id
+                self.display(f"Codex thread: {turn.thread_id}")
+                self.display(f"Open it later: codex resume {turn.thread_id}")
             self.runtime.accept_summary(session_id, turn.spoken_summary)
             self.display(f"\nCodex:\n{turn.display_text}\n")
             pending = await self.audio.exchange(turn.spoken_summary)
@@ -160,11 +166,12 @@ def run_handsfree_broker(
     server.start()
     server_thread = threading.Thread(target=server.serve_forever, name="voicemode-broker", daemon=True)
     server_thread.start()
-    audio = VoiceAudio(
+    audio = PersistentVoiceAudio(
         voice=voice,
         listen_duration=listen_duration,
         min_duration=min_duration,
     )
+    audio.start()
     loop = HandsFreeLoop(
         repo_root=repo_root,
         runtime=runtime,
@@ -179,6 +186,7 @@ def run_handsfree_broker(
     try:
         asyncio.run(loop.run())
     finally:
+        audio.close()
         runtime.begin_shutdown()
         server.stop()
         server_thread.join(timeout=2)

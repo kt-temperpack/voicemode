@@ -129,9 +129,11 @@ def broker_status(as_json: bool, socket_path: Path):
     click.echo(f"Pending turns: {result['pending_turns']}")
     if session:
         click.echo(
-            f"Session: {session['session_id'][:8]}  Codex: {session['codex_session_id']}  "
-            f"Repository: {session['repo_root']}"
+            f"Session: {session['session_id'][:8]}  Repository: {session['repo_root']}"
         )
+        click.echo(f"Codex thread: {session['codex_session_id']}")
+        if session["codex_session_id"] != "handsfree":
+            click.echo(f"Resume: codex resume {session['codex_session_id']}")
     else:
         click.echo("Session: none")
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -119,6 +120,17 @@ class BrokerRuntime:
 
     def activate(self, session_id: str) -> None:
         self._session_event(session_id, BrokerEvent.ACTIVATE)
+
+    def attach_codex_thread(self, session_id: str, codex_session_id: str) -> None:
+        """Replace the provisional hands-free label with Codex's real thread ID."""
+        with self._condition:
+            session = self._require_session(session_id)
+            self._session = replace(session, codex_session_id=codex_session_id)
+        self._emit(
+            "BROKER_CODEX_THREAD_ATTACHED",
+            session_id=session_id,
+            codex_session_prefix=codex_session_id[:8],
+        )
 
     def start_listening(self, session_id: str) -> None:
         self._session_event(session_id, BrokerEvent.LISTEN_STARTED)

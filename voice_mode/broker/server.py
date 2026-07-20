@@ -267,7 +267,7 @@ class BrokerDispatcher:
     def _session_payload(session, age_seconds: float) -> dict:
         return {
             "session_id": session.session_id,
-            "codex_session_id": session.codex_session_id[:8],
+            "codex_session_id": session.codex_session_id,
             "repo_root": session.repo_root,
             "age_seconds": age_seconds,
         }

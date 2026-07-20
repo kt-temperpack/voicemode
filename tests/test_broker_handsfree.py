@@ -31,7 +31,11 @@ class FakeCodex:
 
     def run_turn(self, prompt):
         self.prompts.append(prompt)
-        return SimpleNamespace(display_text=f"full:{prompt}", spoken_summary=f"short:{prompt}")
+        return SimpleNamespace(
+            display_text=f"full:{prompt}",
+            spoken_summary=f"short:{prompt}",
+            thread_id=self.thread_id,
+        )
 
 
 def test_wake_and_control_parsing_is_strict():
@@ -68,5 +72,7 @@ async def test_loop_ignores_ambient_then_reuses_codex_for_followup(tmp_path):
 
     assert codex.prompts == ["inspect the repo", "run focused tests"]
     assert any("full:inspect the repo" in line for line in displayed)
+    assert "Codex thread: codex-1" in displayed
+    assert "Open it later: codex resume codex-1" in displayed
     assert runtime.snapshot().shutting_down is True
     assert runtime.snapshot().session is None

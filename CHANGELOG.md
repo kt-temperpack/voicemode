@@ -15,7 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   concise summaries with the local `am_michael` voice. Follow-ups reuse the
   same Codex context until silence or `go to sleep`; `exit voice mode` and the
   existing status/stop socket provide clean shutdown, while `--daemon-only`
-  retains the original audio-free broker for protocol development.
+  retains the original audio-free broker for protocol development. The broker
+  holds one microphone stream open instead of toggling CoreAudio per listen
+  window, plays distinct listening-active and prompt-submitted cues, keeps
+  wake-listener transcription local-only, and prints the full Codex thread ID
+  with its `codex resume` command after the first turn.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

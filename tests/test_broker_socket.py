@@ -38,7 +38,7 @@ def test_real_round_trip_and_content_redaction(live_broker, tmp_path):
     runtime, client, _server = live_broker
     opened = client.open("codex-private-identifier", str(tmp_path))
     session_id = opened["session"]["session_id"]
-    assert opened["session"]["codex_session_id"] == "codex-pr"
+    assert opened["session"]["codex_session_id"] == "codex-private-identifier"
     runtime.activate(session_id)
     runtime.enqueue_utterance(session_id, "recognizable secret")
     turn = client.turn(session_id)

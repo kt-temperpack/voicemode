@@ -44,6 +44,12 @@ def test_fake_adapter_lifecycle_and_exactly_once_delivery(runtime, tmp_path):
     assert runtime.snapshot().phase is BrokerPhase.ENGAGED
 
 
+def test_attach_codex_thread_replaces_provisional_identifier(runtime, tmp_path):
+    session = runtime.open_session("handsfree", str(tmp_path))
+    runtime.attach_codex_thread(session.session_id, "thread-full-123")
+    assert runtime.snapshot().session.codex_session_id == "thread-full-123"
+
+
 def test_queue_full_close_and_shutdown_wake_waiters(runtime, tmp_path):
     session = runtime.open_session("codex", str(tmp_path))
     runtime.start_listening(session.session_id)

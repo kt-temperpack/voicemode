@@ -49,6 +49,7 @@ def test_live_status_rendering(monkeypatch):
     assert human.exit_code == 0
     assert "Broker is running: engaged" in human.output
     assert "Repository: /repo" in human.output
+    assert "Resume: codex resume codex-12" in human.output
     machine = CliRunner().invoke(voice_mode_main_cli, ["broker", "status", "--json"])
     assert machine.exit_code == 0
     assert '"shutting_down": false' in machine.output
