@@ -31,6 +31,9 @@ PRIVATE_CALL_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"\brtc_[A-Za-z0-9_
 PRIVATE_CALL_ID_FULL_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^rtc_[A-Za-z0-9_-]{1,124}$"
 )
+STRICT_BEARER_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^[Bb][Ee][Aa][Rr][Ee][Rr] (?P<token>[A-Za-z0-9._~-]+)$"
+)
 OPENAI_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(r"\bsk-[A-Za-z0-9_-]+\b")
 BEARER_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"\bBearer\s+[A-Za-z0-9._~-]+",
@@ -179,10 +182,10 @@ def validate_forwarded_headers(headers: Mapping[str, str]) -> None:
 
 def extract_bearer_token(header_value: str) -> str:
     ensure_bounded_bytes(header_value, label="authorization header", max_bytes=MAX_HEADER_BYTES)
-    scheme, separator, token = header_value.partition(" ")
-    if separator != " " or scheme.lower() != "bearer":
+    match = STRICT_BEARER_PATTERN.fullmatch(header_value)
+    if match is None:
         raise ValueError("authorization header must use Bearer")
-    return validate_capability_token(token)
+    return validate_capability_token(match.group("token"))
 
 
 def validate_loopback_socket_binding(bound_socket: socket.socket) -> tuple[str, int]:

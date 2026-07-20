@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import re
 from dataclasses import dataclass, field
 from importlib import resources
 from typing import Any, Awaitable, Callable, Mapping, Protocol
@@ -63,6 +64,7 @@ STATIC_ASSETS = {
     "assets/app.js": "application/javascript; charset=utf-8",
     "assets/styles.css": "text/css; charset=utf-8",
 }
+GENERATION_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 ALLOWED_CONTROL_ACTIONS = frozenset(
     {
         "heartbeat",
@@ -142,6 +144,8 @@ class LoopbackWebConfig:
     event_queue_size: int = MAX_LOCAL_EVENT_BACKLOG
     heartbeat_timeout_seconds: float = 10.0
     keepalive_interval_seconds: float = 2.0
+    timeout_callback_timeout_seconds: float = 1.0
+    shutdown_callback_timeout_seconds: float = 5.0
     internal_missing_origin_policy: MissingOriginPolicy | None = None
     asset_loader: AssetLoader | None = None
     bound_socket: Any | None = None
@@ -158,6 +162,10 @@ class LoopbackWebConfig:
             raise ValueError("heartbeat_timeout_seconds must be positive")
         if self.keepalive_interval_seconds <= 0:
             raise ValueError("keepalive_interval_seconds must be positive")
+        if self.timeout_callback_timeout_seconds <= 0:
+            raise ValueError("timeout_callback_timeout_seconds must be positive")
+        if self.shutdown_callback_timeout_seconds <= 0:
+            raise ValueError("shutdown_callback_timeout_seconds must be positive")
         if self.bound_socket is not None:
             validate_loopback_socket_binding(self.bound_socket)
 
@@ -170,11 +178,16 @@ class _ControllerState:
     last_heartbeat: float = 0.0
     timeout_notified: bool = False
     expired: bool = False
+    teardown_started: bool = False
+    timeout_callback_finished: bool = False
+    stream_closed: asyncio.Event = field(default_factory=asyncio.Event)
 
     def mark_live(self, now: float) -> None:
         self.last_heartbeat = now
         self.timeout_notified = False
         self.expired = False
+        self.teardown_started = False
+        self.timeout_callback_finished = False
 
 
 @dataclass
@@ -242,7 +255,10 @@ class LoopbackWebRuntime:
             controller.connected = False
             self._safe_queue_put(controller.queue, _encode_ndjson({"type": "server_stopping"}))
         if self.shutdown_callback is not None:
-            await _maybe_await(self.shutdown_callback())
+            await self._run_bounded_callback(
+                self.shutdown_callback(),
+                timeout_seconds=self.config.shutdown_callback_timeout_seconds,
+            )
 
     async def _on_cleanup(self, app: web.Application) -> None:
         del app
@@ -266,8 +282,14 @@ class LoopbackWebRuntime:
                 continue
             controller.timeout_notified = True
             controller.expired = True
+            controller.teardown_started = True
+            self._safe_queue_put(controller.queue, b"")
             if self.timeout_callback is not None:
-                await _maybe_await(self.timeout_callback(controller.generation))
+                await self._run_bounded_callback(
+                    self.timeout_callback(controller.generation),
+                    timeout_seconds=self.config.timeout_callback_timeout_seconds,
+                )
+            controller.timeout_callback_finished = True
 
     def _add_routes(self) -> None:
         self.app.router.add_get("/", self._handle_index)
@@ -299,6 +321,8 @@ class LoopbackWebRuntime:
                     status=error.status,
                 )
             )
+        except web.HTTPException as error:
+            return self._apply_security_headers(error)
 
     @web.middleware
     async def _security_headers_middleware(
@@ -399,9 +423,10 @@ class LoopbackWebRuntime:
             self._authorize_takeover(generation)
             return web.json_response({"ok": True, "generation": generation, "action": action})
 
+        payload = {"action": action, "generation": generation}
         result: Mapping[str, Any] | None = None
         if self.handle_control is not None:
-            result = await _maybe_await(self.handle_control(action, generation, document))
+            result = await _maybe_await(self.handle_control(action, generation, payload))
         response = {"ok": True, "generation": generation, "action": action}
         if result:
             response["result"] = _normalize_public_document(result)
@@ -419,6 +444,7 @@ class LoopbackWebRuntime:
         self._require_known_generation(generation)
         controller = self._claim_controller(generation)
         controller.mark_live(self.clock())
+        controller.stream_closed.clear()
         response = web.StreamResponse(
             status=200,
             headers={"Content-Type": EVENT_STREAM_CONTENT_TYPE},
@@ -446,8 +472,13 @@ class LoopbackWebRuntime:
             pass
         finally:
             controller.connected = False
+            controller.stream_closed.set()
             if self.active_controller is controller and not controller.expired:
                 controller.mark_live(self.clock())
+            try:
+                await response.write_eof()
+            except (ConnectionError, RuntimeError):
+                pass
         return response
 
     def _claim_controller(self, generation: str) -> _ControllerState:
@@ -464,8 +495,20 @@ class LoopbackWebRuntime:
                     "controller_active",
                     "the current controller is already connected",
                 )
+            if current.expired:
+                raise _PublicRouteError(
+                    409,
+                    "takeover_required",
+                    "the current generation expired and must start a new session",
+                )
             current.mark_live(now)
             return current
+        if self._controller_teardown_in_progress(current):
+            raise _PublicRouteError(
+                409,
+                "controller_active",
+                "the current controller is still tearing down",
+            )
         if self._controller_is_live(current, now):
             raise _PublicRouteError(
                 409,
@@ -489,6 +532,12 @@ class LoopbackWebRuntime:
         if controller is None:
             self.pending_takeover_generation = generation
             return
+        if self._controller_teardown_in_progress(controller):
+            raise _PublicRouteError(
+                409,
+                "controller_active",
+                "the current controller is still tearing down",
+            )
         if self._controller_is_live(controller, now):
             raise _PublicRouteError(
                 409,
@@ -512,6 +561,7 @@ class LoopbackWebRuntime:
             generation=generation,
             queue=asyncio.Queue(maxsize=self.config.event_queue_size),
         )
+        controller.stream_closed.set()
         controller.mark_live(now)
         return controller
 
@@ -525,6 +575,11 @@ class LoopbackWebRuntime:
         _clear_queue(controller.queue)
         self._safe_queue_put(controller.queue, _encode_ndjson({"type": "resync_required"}))
         self._safe_queue_put(controller.queue, self._snapshot_line())
+
+    def _controller_teardown_in_progress(self, controller: _ControllerState) -> bool:
+        return controller.teardown_started and not (
+            controller.timeout_callback_finished and controller.stream_closed.is_set()
+        )
 
     def _stream_should_continue(self, controller: _ControllerState) -> bool:
         return (
@@ -545,7 +600,7 @@ class LoopbackWebRuntime:
         try:
             body = loader(asset_path)
         except FileNotFoundError as error:
-            raise _PublicRouteError(503, "asset_missing", str(error))
+            raise _PublicRouteError(503, "asset_missing", "static asset is unavailable") from error
         if not isinstance(body, (bytes, bytearray)):
             raise TypeError("asset_loader must return bytes")
         return bytes(body)
@@ -592,7 +647,11 @@ class LoopbackWebRuntime:
             token = extract_bearer_token(header_value)
         except ValueError as error:
             raise _PublicRouteError(401, "unauthorized", str(error))
-        if not compare_capability_token(self.capability_token, token):
+        try:
+            authorized = compare_capability_token(self.capability_token, token)
+        except ValueError as error:
+            raise _PublicRouteError(401, "unauthorized", str(error))
+        if not authorized:
             raise _PublicRouteError(401, "unauthorized", "authorization token is invalid")
 
     def _assert_origin(self, request: web.Request) -> None:
@@ -642,6 +701,12 @@ class LoopbackWebRuntime:
             _clear_queue(queue)
         queue.put_nowait(value)
 
+    async def _run_bounded_callback(self, value: Any, *, timeout_seconds: float) -> None:
+        try:
+            await asyncio.wait_for(_maybe_await(value), timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            return
+
 
 class _PublicRouteError(RuntimeError):
     def __init__(self, status: int, code: str, message: str) -> None:
@@ -686,6 +751,8 @@ def make_loopback_config(
     event_queue_size: int = MAX_LOCAL_EVENT_BACKLOG,
     heartbeat_timeout_seconds: float = 10.0,
     keepalive_interval_seconds: float = 2.0,
+    timeout_callback_timeout_seconds: float = 1.0,
+    shutdown_callback_timeout_seconds: float = 5.0,
     internal_missing_origin_policy: MissingOriginPolicy | None = None,
     asset_loader: AssetLoader | None = None,
     bound_socket: Any | None = None,
@@ -697,6 +764,8 @@ def make_loopback_config(
         event_queue_size=event_queue_size,
         heartbeat_timeout_seconds=heartbeat_timeout_seconds,
         keepalive_interval_seconds=keepalive_interval_seconds,
+        timeout_callback_timeout_seconds=timeout_callback_timeout_seconds,
+        shutdown_callback_timeout_seconds=shutdown_callback_timeout_seconds,
         internal_missing_origin_policy=internal_missing_origin_policy,
         asset_loader=asset_loader,
         bound_socket=bound_socket,
@@ -710,8 +779,7 @@ def _default_asset_loader(asset_path: str) -> bytes:
 
 def _validate_generation(value: str) -> str:
     ensure_bounded_bytes(value, label="generation", max_bytes=128)
-    invalid_characters = {"/", "\\", "?", "#", " "}
-    if any(character in value for character in invalid_characters):
+    if GENERATION_PATTERN.fullmatch(value) is None:
         raise _PublicRouteError(400, "invalid_generation", "generation contains unsafe characters")
     return value
 

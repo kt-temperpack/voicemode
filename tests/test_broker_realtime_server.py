@@ -193,6 +193,19 @@ async def test_authenticated_mutations_require_exact_host_origin_and_bearer() ->
         )
         assert missing_bearer.status == 401
 
+        short_bearer = await client.post(
+            "/v1/session",
+            data="v=0\noffer",
+            headers={
+                "Authorization": "Bearer short",
+                "Host": authority,
+                "Origin": f"http://{authority}",
+                "Content-Type": "application/sdp",
+            },
+        )
+        assert short_bearer.status == 401
+        assert (await short_bearer.json())["error"]["code"] == "unauthorized"
+
         forwarded = await client.post(
             "/v1/session",
             data="v=0\noffer",
@@ -282,6 +295,7 @@ async def test_session_and_control_routes_enforce_limits_and_closed_schema() -> 
         assert stop.status == 200
         assert (await stop.json())["result"] == {"accepted": "stop"}
         assert harness.control_calls[0][0] == "stop"
+        assert harness.control_calls[0][2] == {"action": "stop", "generation": "gen-1"}
 
         assert runtime.capability_token == "A" * 32
         assert "A" * 32 not in ASSETS["index.html"].decode()
@@ -383,6 +397,71 @@ async def test_public_errors_keep_security_and_no_store_headers() -> None:
         assert response.headers["Content-Security-Policy"]
         assert response.headers["Cache-Control"] == "no-store"
         assert response.headers["Referrer-Policy"] == "no-referrer"
+
+        missing = await client.get("/missing", headers={"Host": client.make_url('/').authority})
+        assert missing.status == 404
+        assert missing.headers["Content-Security-Policy"]
+        assert missing.headers["Cache-Control"] == "no-store"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_asset_failures_do_not_leak_filesystem_paths() -> None:
+    harness = Harness()
+
+    def missing_asset_loader(asset_path: str) -> bytes:
+        raise FileNotFoundError(f"/private/tmp/secret/{asset_path}")
+
+    client, runtime = await _start_client(
+        harness,
+        config=make_loopback_config(
+            capability_token="A" * 32,
+            asset_loader=missing_asset_loader,
+            heartbeat_timeout_seconds=0.1,
+            keepalive_interval_seconds=0.05,
+            event_queue_size=2,
+        ),
+    )
+    del runtime
+    try:
+        response = await client.get("/", headers={"Host": client.make_url('/').authority})
+        assert response.status == 503
+        body = await response.json()
+        assert body["error"]["code"] == "asset_missing"
+        assert "/private/tmp/secret" not in body["error"]["message"]
+        assert response.headers["Cache-Control"] == "no-store"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_session_rejects_generations_with_control_characters() -> None:
+    harness = Harness()
+    runtime = create_loopback_runtime(
+        config=make_loopback_config(
+            capability_token="A" * 32,
+            asset_loader=harness.asset_loader,
+            heartbeat_timeout_seconds=0.1,
+            keepalive_interval_seconds=0.05,
+            event_queue_size=2,
+        ),
+        start_session=lambda offer: SessionBootstrap(
+            generation="gen-1\r\nX-Injected: bad",
+            answer_sdp=offer,
+        ),
+        snapshot_provider=harness.snapshot,
+    )
+    client = TestClient(TestServer(runtime.app, host="127.0.0.1", port=0))
+    await client.start_server()
+    try:
+        response = await client.post(
+            "/v1/session",
+            data="v=0\noffer",
+            headers={**_auth_headers(client, "A" * 32), "Content-Type": "application/sdp"},
+        )
+        assert response.status == 400
+        assert (await response.json())["error"]["code"] == "invalid_generation"
     finally:
         await client.close()
 
@@ -421,6 +500,166 @@ async def test_shutdown_calls_injected_teardown_once() -> None:
     del runtime
     await client.close()
     assert harness.shutdown_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_expiry_closes_stream_before_takeover_completes() -> None:
+    harness = Harness()
+    timeout_started = asyncio.Event()
+    timeout_release = asyncio.Event()
+
+    async def blocking_timeout(generation: str) -> None:
+        harness.timeout_calls.append(generation)
+        timeout_started.set()
+        await timeout_release.wait()
+
+    client, runtime = await _start_client(
+        harness,
+        config=make_loopback_config(
+            capability_token="A" * 32,
+            asset_loader=harness.asset_loader,
+            heartbeat_timeout_seconds=0.05,
+            keepalive_interval_seconds=0.01,
+            timeout_callback_timeout_seconds=0.5,
+            event_queue_size=2,
+        ),
+    )
+    runtime.timeout_callback = blocking_timeout
+    try:
+        headers = _auth_headers(client, "A" * 32)
+        created = await client.post(
+            "/v1/session",
+            data="v=0\noffer",
+            headers={**headers, "Content-Type": "application/sdp"},
+        )
+        assert created.status == 200
+        second = await client.post(
+            "/v1/session",
+            data="v=0\noffer-2",
+            headers={**headers, "Content-Type": "application/sdp"},
+        )
+        assert second.status == 200
+
+        stream = await client.get("/v1/events", headers={**headers, "X-VoiceMode-Generation": "gen-1"})
+        assert stream.status == 200
+        await asyncio.wait_for(stream.content.readline(), timeout=1)
+        await asyncio.wait_for(timeout_started.wait(), timeout=1)
+
+        stale_tail = await asyncio.wait_for(stream.content.read(), timeout=1)
+        assert b"snapshot" not in stale_tail
+        assert stream.content.at_eof()
+
+        blocked = await client.post(
+            "/v1/control",
+            json={"action": "takeover", "generation": "gen-2"},
+            headers=headers,
+        )
+        assert blocked.status == 409
+        assert (await blocked.json())["error"]["code"] == "controller_active"
+
+        timeout_release.set()
+        await asyncio.sleep(0.05)
+
+        takeover = await client.post(
+            "/v1/control",
+            json={"action": "takeover", "generation": "gen-2"},
+            headers=headers,
+        )
+        assert takeover.status == 200
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_timeout_callback_is_bounded() -> None:
+    harness = Harness()
+    timeout_started = asyncio.Event()
+    timeout_cancelled = asyncio.Event()
+
+    async def blocking_timeout(generation: str) -> None:
+        harness.timeout_calls.append(generation)
+        timeout_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            timeout_cancelled.set()
+            raise
+
+    client, runtime = await _start_client(
+        harness,
+        config=make_loopback_config(
+            capability_token="A" * 32,
+            asset_loader=harness.asset_loader,
+            heartbeat_timeout_seconds=0.05,
+            keepalive_interval_seconds=0.01,
+            timeout_callback_timeout_seconds=0.05,
+            event_queue_size=2,
+        ),
+    )
+    runtime.timeout_callback = blocking_timeout
+    try:
+        headers = _auth_headers(client, "A" * 32)
+        created = await client.post(
+            "/v1/session",
+            data="v=0\noffer",
+            headers={**headers, "Content-Type": "application/sdp"},
+        )
+        assert created.status == 200
+        second = await client.post(
+            "/v1/session",
+            data="v=0\noffer-2",
+            headers={**headers, "Content-Type": "application/sdp"},
+        )
+        assert second.status == 200
+
+        stream = await client.get("/v1/events", headers={**headers, "X-VoiceMode-Generation": "gen-1"})
+        assert stream.status == 200
+        await asyncio.wait_for(stream.content.readline(), timeout=1)
+        await asyncio.wait_for(timeout_started.wait(), timeout=1)
+        await asyncio.wait_for(stream.content.read(), timeout=1)
+
+        await asyncio.sleep(0.1)
+        assert timeout_cancelled.is_set()
+
+        takeover = await client.post(
+            "/v1/control",
+            json={"action": "takeover", "generation": "gen-2"},
+            headers=headers,
+        )
+        assert takeover.status == 200
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_callback_timeout_is_bounded() -> None:
+    harness = Harness()
+    shutdown_started = asyncio.Event()
+    shutdown_cancelled = asyncio.Event()
+
+    async def blocking_shutdown() -> None:
+        shutdown_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            shutdown_cancelled.set()
+            raise
+
+    client, runtime = await _start_client(
+        harness,
+        config=make_loopback_config(
+            capability_token="A" * 32,
+            asset_loader=harness.asset_loader,
+            heartbeat_timeout_seconds=0.1,
+            keepalive_interval_seconds=0.05,
+            shutdown_callback_timeout_seconds=0.05,
+            event_queue_size=2,
+        ),
+    )
+    runtime.shutdown_callback = blocking_shutdown
+    await asyncio.wait_for(client.close(), timeout=0.5)
+    assert shutdown_started.is_set()
+    assert shutdown_cancelled.is_set()
 
 
 @pytest.mark.asyncio
