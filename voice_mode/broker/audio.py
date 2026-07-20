@@ -114,6 +114,20 @@ async def _play_listening_cue() -> bool:
     return await play_chime_start(leading_silence=0, trailing_silence=0)
 
 
+async def _play_interruption_cue() -> bool:
+    from voice_mode.core import play_chime_captured
+
+    return await play_chime_captured(leading_silence=0, trailing_silence=0)
+
+
+async def _play_failure_cue() -> bool:
+    from voice_mode.core import play_chime_end
+
+    first = await play_chime_end(leading_silence=0, trailing_silence=0)
+    second = await play_chime_end(leading_silence=0, trailing_silence=0)
+    return first and second
+
+
 class PersistentVoiceAudio:
     """Keep one CoreAudio input stream open and segment utterances with VAD."""
 
@@ -130,6 +144,8 @@ class PersistentVoiceAudio:
         transcribe_callable: TranscribeCallable = _transcribe_local,
         listening_cue_callable: CueCallable = _play_listening_cue,
         submitted_cue_callable: CueCallable = _play_submitted_cue,
+        interruption_cue_callable: CueCallable = _play_interruption_cue,
+        failure_cue_callable: CueCallable = _play_failure_cue,
         cues_enabled: bool = AUDIO_FEEDBACK_ENABLED,
         silence_threshold_ms: int = 900,
         endpoint_sink: Callable[[EndpointDecision], None] | None = None,
@@ -144,6 +160,8 @@ class PersistentVoiceAudio:
         self._transcribe_callable = transcribe_callable
         self._listening_cue_callable = listening_cue_callable
         self._submitted_cue_callable = submitted_cue_callable
+        self._interruption_cue_callable = interruption_cue_callable
+        self._failure_cue_callable = failure_cue_callable
         self._cues_enabled = cues_enabled
         self._silence_threshold_ms = silence_threshold_ms
         self._endpoint_sink = endpoint_sink
@@ -332,6 +350,20 @@ class PersistentVoiceAudio:
             self._muted.set()
             self._drain()
             await self._submitted_cue_callable()
+            self._drain()
+
+    async def cue_interruption(self) -> None:
+        if self._cues_enabled:
+            self._muted.set()
+            self._drain()
+            await self._interruption_cue_callable()
+            self._drain()
+
+    async def cue_failure(self) -> None:
+        if self._cues_enabled:
+            self._muted.set()
+            self._drain()
+            await self._failure_cue_callable()
             self._drain()
 
     async def speak(self, message: str) -> None:

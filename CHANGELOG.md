@@ -59,6 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cancellation latency, interrupts only the correlated Codex request when the
   adapter supports it, and otherwise preserves one redirected utterance for the
   next safe turn without replaying old audio.
+  Cue playback is now serialized and deduplicated by lifecycle event, while
+  TTY, line, and JSONL state views keep transcripts hidden unless both output
+  disclosure and transcript persistence are explicitly enabled.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

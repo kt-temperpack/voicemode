@@ -738,6 +738,13 @@ BROKER_SILENCE_THRESHOLD_MS = _bounded_env_number(
 )
 BROKER_HOTKEY = os.getenv("VOICEMODE_BROKER_HOTKEY", "").strip() or None
 BROKER_TERMINAL_KEYS = env_bool("VOICEMODE_BROKER_TERMINAL_KEYS", True)
+BROKER_OUTPUT_MODE = os.getenv("VOICEMODE_BROKER_OUTPUT_MODE", "auto").strip().lower()
+if BROKER_OUTPUT_MODE not in {"auto", "tty", "lines", "jsonl"}:
+    BROKER_OUTPUT_MODE = "auto"
+BROKER_OUTPUT_INCLUDE_TRANSCRIPT = env_bool(
+    "VOICEMODE_BROKER_OUTPUT_INCLUDE_TRANSCRIPT", False
+)
+BROKER_OUTPUT_TRANSCRIPT_AUTHORIZED = SAVE_TRANSCRIPTIONS
 BROKER_CODEX_EXECUTABLE = os.getenv("VOICEMODE_BROKER_CODEX_EXECUTABLE", "codex").strip() or "codex"
 BROKER_CODEX_SANDBOX = os.getenv("VOICEMODE_BROKER_CODEX_SANDBOX", "workspace-write").strip()
 if BROKER_CODEX_SANDBOX not in {"read-only", "workspace-write", "danger-full-access"}:

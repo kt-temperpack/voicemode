@@ -20,8 +20,9 @@ from .activation import (
     ActivationState,
     reduce_activation,
 )
-from .codex import CodexAdapter, CodexTurnError
 from .barge_in import BargeInCoordinator
+from .codex import CodexAdapter, CodexTurnError
+from .cues import CueKind, CuePolicy
 from .hosts import (
     AppServerHostAdapter,
     AppServerTransport,
@@ -35,8 +36,8 @@ from .hotkey import HotkeyRegistrationError, PlatformHotkeyAdapter, TerminalKeyA
 from .recovery import RecoveryAction, RecoveryCoordinator
 from .runtime import BrokerRuntime
 from .server import create_broker
-from .presentation import Presenter
-from .types import CanonicalResponse, HostEvent, HostEventKind
+from .presentation import Presenter, TerminalMode, TerminalPresenter
+from .types import BrokerEvent, CanonicalResponse, HostEvent, HostEventKind
 
 
 EXEC_NEW_THREAD_ID = "exec:new-separate-thread"
@@ -241,6 +242,7 @@ class HandsFreeLoop:
         recovery: RecoveryCoordinator | None = None,
         activation_bus: ActivationBus | None = None,
         display: Callable[[str], None] = print,
+        terminal: TerminalPresenter | None = None,
     ) -> None:
         self.repo_root = Path(repo_root).resolve()
         self.runtime = runtime
@@ -251,6 +253,18 @@ class HandsFreeLoop:
         self.recovery = recovery
         self.host_probe = host_adapter.probe()
         self.display = display
+        self.terminal = terminal
+        self._event_loop: asyncio.AbstractEventLoop | None = None
+        self._cue_sequence = 0
+        cue_players = {
+            CueKind.RISING: audio.cue_listening,
+            CueKind.FALLING: audio.cue_submitted,
+        }
+        if hasattr(audio, "cue_interruption"):
+            cue_players[CueKind.INTERRUPTION] = audio.cue_interruption
+        if hasattr(audio, "cue_failure"):
+            cue_players[CueKind.FAILURE] = audio.cue_failure
+        self._cues = CuePolicy(cue_players)
         self._runner = HostTurnRunner(host_adapter, thread_id, display=display)
         self._runner.should_stop = lambda: self.runtime.snapshot().shutting_down
         self._shown_codex_thread: str | None = thread_id
@@ -290,6 +304,11 @@ class HandsFreeLoop:
             )
         elif event.kind is ActivationKind.INTERRUPT:
             self._barge_in.activate(activated_at=event.timestamp)
+            if self._event_loop is not None:
+                asyncio.run_coroutine_threadsafe(
+                    self._cue(BrokerEvent.BARGE_IN, f"interrupt:{event.timestamp}"),
+                    self._event_loop,
+                )
         if current.endpoint_requested and not previous.endpoint_requested:
             self.audio.release_push_to_talk()
 
@@ -301,12 +320,23 @@ class HandsFreeLoop:
                 f"{result.rationale}"
             )
 
+    async def _cue(self, event: BrokerEvent, event_id: str | None = None) -> None:
+        if event_id is None:
+            self._cue_sequence += 1
+            event_id = f"{event.value}:{self._cue_sequence}"
+        await self._cues.emit(event, event_id)
+
+    def _state(
+        self, event: BrokerEvent, state: str, *, transcript: str | None = None
+    ) -> None:
+        if self.terminal is not None:
+            self.terminal.state(event.value, state, transcript=transcript)
+
     async def _capture_redirect(self, request_id: str) -> str | None:
         pending = await self._listen_safely()
         self._consume_direct_capture()
         self._barge_in.finish(request_id)
         if pending:
-            await self.audio.cue_submitted()
             self.display(f"You: {pending}")
         return pending
 
@@ -328,6 +358,7 @@ class HandsFreeLoop:
             pass
 
     async def run(self) -> None:
+        self._event_loop = asyncio.get_running_loop()
         self.display(f"Codex adapter: {self.host_probe.adapter}")
         if self.host_probe.reason:
             self.display(f"Adapter note: {self.host_probe.reason}")
@@ -337,6 +368,7 @@ class HandsFreeLoop:
             self.display(f"Open it later: codex resume {self.thread_id}")
         self.display(f"Wake phrase: {self.wake_phrase}")
         self.display("Hands-free Codex ready")
+        self._state(BrokerEvent.RESET, "asleep")
         await self.audio.speak(
             f"Hands-free Codex is ready. Say {self.wake_phrase}, followed by your request."
         )
@@ -358,14 +390,24 @@ class HandsFreeLoop:
                     continue
                 if not pending:
                     self.display("Wake accepted; listening for your request…")
-                    await self.audio.cue_listening()
+                    self._state(BrokerEvent.LISTEN_STARTED, "listening")
+                    await self._cue(BrokerEvent.LISTEN_STARTED)
                     pending = await self._listen_safely()
                     if not pending:
                         continue
                     self.display(f"You: {pending}")
-                self.display("Request accepted; submitting to Codex…")
-                await self.audio.cue_submitted()
-                if control_intent(pending) == "exit":
+                intent = control_intent(pending)
+                if intent == "ack":
+                    pending = None
+                    self.display(f"Acknowledged. Say {self.wake_phrase} for another request.")
+                    continue
+                if intent == "sleep":
+                    pending = None
+                    await self.audio.speak(
+                        f"Going to sleep. Say {self.wake_phrase} when you need me."
+                    )
+                    continue
+                if intent == "exit":
                     await self.audio.speak("Hands-free Codex is stopping.")
                     self.runtime.begin_shutdown()
                     return
@@ -394,6 +436,14 @@ class HandsFreeLoop:
                 await self.audio.speak("Hands-free Codex is stopping.")
                 self.runtime.begin_shutdown()
                 return
+
+            self.display("Request accepted; submitting to Codex…")
+            self._state(
+                BrokerEvent.UTTERANCE_ENQUEUED,
+                "thinking",
+                transcript=pending,
+            )
+            await self._cue(BrokerEvent.UTTERANCE_ENQUEUED)
 
             active_session = self.runtime.snapshot().session
             assert active_session is not None
@@ -432,6 +482,8 @@ class HandsFreeLoop:
                     continue
                 self.runtime.mark_dispatch_uncertain(envelope.request_id)
                 self.display(f"Codex error: {error}")
+                self._state(BrokerEvent.FAULT, "asleep")
+                await self._cue(BrokerEvent.FAULT, f"failure:{envelope.request_id}")
                 self._close_session(session_id)
                 session_id = None
                 pending = None
@@ -464,10 +516,15 @@ class HandsFreeLoop:
                     self.runtime.finish_tts(envelope.request_id, failed=True)
             else:
                 self.runtime.accept_summary(session_id, response.spoken_text)
+                self._state(BrokerEvent.SUMMARY_ACCEPTED, "speaking")
                 await self._presenter.present(response)
                 redirected = self._barge_in.redirect_pending(envelope.request_id)
             if not redirected:
-                await self.audio.cue_listening()
+                self._state(BrokerEvent.LISTEN_STARTED, "listening")
+                await self._cue(
+                    BrokerEvent.LISTEN_STARTED,
+                    f"followup:{envelope.request_id}",
+                )
             pending = await self._listen_safely()
             if redirected:
                 self._consume_direct_capture()
@@ -481,8 +538,8 @@ class HandsFreeLoop:
                 self._close_session(session_id)
                 session_id = None
                 self.display(f"Follow-up window closed. Say {self.wake_phrase} to wake me.")
+                self._state(BrokerEvent.FOLLOWUP_EXPIRED, "asleep")
                 continue
-            await self.audio.cue_submitted()
             self.display(f"You: {pending}")
             if not redirected:
                 self.runtime.start_listening(session_id)
@@ -521,6 +578,7 @@ class HandsFreeLoop:
             return None
 
     def close(self) -> None:
+        self._event_loop = None
         self._activation_unsubscribe()
         self._runner.close()
         self.host_adapter.close()
@@ -554,6 +612,9 @@ def run_handsfree_broker(
         BROKER_JOURNAL_INCLUDE_TRANSCRIPT,
         BROKER_JOURNAL_MAX_BYTES,
         BROKER_JOURNAL_MAX_FILES,
+        BROKER_OUTPUT_INCLUDE_TRANSCRIPT,
+        BROKER_OUTPUT_MODE,
+        BROKER_OUTPUT_TRANSCRIPT_AUTHORIZED,
     )
 
     if codex_adapter not in {"auto", "app-server", "exec"}:
@@ -644,6 +705,12 @@ def run_handsfree_broker(
         )
         audio.start()
         activation_bus = ActivationBus()
+        terminal = TerminalPresenter(
+            sys.stdout,
+            mode=TerminalMode(BROKER_OUTPUT_MODE),
+            include_transcript=BROKER_OUTPUT_INCLUDE_TRANSCRIPT,
+            transcript_authorized=BROKER_OUTPUT_TRANSCRIPT_AUTHORIZED,
+        )
         loop = HandsFreeLoop(
             repo_root=repo_root,
             runtime=runtime,
@@ -653,22 +720,26 @@ def run_handsfree_broker(
             thread_id=selected_thread_id,
             recovery=recovery,
             activation_bus=activation_bus,
+            terminal=terminal,
+            display=terminal.line,
         )
         if hotkey:
             hotkey_adapter = PlatformHotkeyAdapter(hotkey, activation_bus)
             try:
                 hotkey_adapter.start()
             except HotkeyRegistrationError as error:
-                print(f"Hotkey unavailable: {error}")
-                print(f"Wake phrase remains available: {wake_phrase}")
+                terminal.line(f"Hotkey unavailable: {error}")
+                terminal.line(f"Wake phrase remains available: {wake_phrase}")
             else:
                 activation_adapters.append(hotkey_adapter)
-                print(f"Push-to-talk hotkey: {hotkey}")
+                terminal.line(f"Push-to-talk hotkey: {hotkey}")
         if terminal_keys and sys.stdin.isatty():
             terminal_adapter = TerminalKeyAdapter(activation_bus)
             terminal_adapter.start()
             activation_adapters.append(terminal_adapter)
-            print("Terminal controls: space toggles push-to-talk; s sleeps; i interrupts")
+            terminal.line(
+                "Terminal controls: space toggles push-to-talk; s sleeps; i interrupts"
+            )
         dispatcher.interrupt_callback = loop.interrupt
         asyncio.run(loop.run())
     finally:

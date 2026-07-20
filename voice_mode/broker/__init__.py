@@ -1,5 +1,7 @@
 """Experimental audio-free conversation broker core."""
 
+from .cues import CueDisposition, CueKind, CuePolicy, CueRecord, cue_for_event
+from .presentation import Presenter, TerminalMode, TerminalPresenter
 from .state import InvalidTransition, project_broker_phase, transition
 from .turns import InvalidTurnTransition, reduce_turn
 from .types import (
@@ -36,8 +38,6 @@ from .types import (
     TurnReduction,
     TurnState,
 )
-from .presentation import Presenter
-
 __all__ = [
     "BrokerCapabilities",
     "BrokerError",
@@ -46,6 +46,10 @@ __all__ = [
     "BrokerPhase",
     "BrokerSnapshot",
     "CanonicalResponse",
+    "CueDisposition",
+    "CueKind",
+    "CuePolicy",
+    "CueRecord",
     "DispatchClaim",
     "DispatchDisposition",
     "HostApprovalRequest",
@@ -65,6 +69,8 @@ __all__ = [
     "PendingUtterance",
     "PresentationState",
     "Presenter",
+    "TerminalMode",
+    "TerminalPresenter",
     "ResultKind",
     "SessionInfo",
     "TurnEnvelope",
@@ -77,4 +83,5 @@ __all__ = [
     "project_broker_phase",
     "reduce_turn",
     "transition",
+    "cue_for_event",
 ]

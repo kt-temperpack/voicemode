@@ -76,8 +76,6 @@ def test_handsfree_cue_baseline_is_explicit():
         "listening",
         "submitted",
         "listening",
-        "submitted",
-        "submitted",
     ]
 
 
