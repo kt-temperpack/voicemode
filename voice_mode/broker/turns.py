@@ -94,6 +94,20 @@ def _validate_response(
         raise _reject(projection, event, "response thread does not match the turn")
     if not response.host_turn_id or not response.display_text.strip():
         raise _reject(projection, event, "response is not presentable")
+    if response.spoken_text.strip():
+        display = " ".join(response.display_text.replace("`", "").split()).casefold()
+        spoken = (
+            " ".join(response.spoken_text.replace("`", "").split())
+            .rstrip("…")
+            .rstrip(".,;:")
+            .casefold()
+        )
+        if spoken not in display:
+            raise _reject(
+                projection,
+                event,
+                "spoken excerpt is not contained in the canonical response",
+            )
 
 
 def reduce_turn(projection: TurnProjection, event: TurnEvent) -> TurnReduction:

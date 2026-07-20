@@ -19,9 +19,11 @@ from .types import (
     BrokerEvent,
     BrokerPhase,
     BrokerSnapshot,
+    CanonicalResponse,
     DispatchClaim,
     DispatchDisposition,
     PendingUtterance,
+    PresentationState,
     SessionInfo,
     TurnEnvelope,
     TurnEvent,
@@ -77,6 +79,8 @@ class BrokerRuntime:
             if record.event == "turn_accepted":
                 recovered[record.request_id] = DispatchDisposition.SAFE_TO_CANCEL
             elif record.event in {"dispatch_claimed", "dispatch_confirmed"}:
+                recovered[record.request_id] = DispatchDisposition.UNCERTAIN
+            elif record.event == "recovery_uncertain":
                 recovered[record.request_id] = DispatchDisposition.UNCERTAIN
             elif record.event == "host_completed":
                 recovered[record.request_id] = DispatchDisposition.COMPLETED
@@ -175,6 +179,17 @@ class BrokerRuntime:
         with self._condition:
             session = self._require_session(session_id)
             self._session = replace(session, codex_session_id=codex_session_id)
+            if (
+                self._turn.envelope is not None
+                and self._turn.envelope.broker_session_id == session_id
+            ):
+                self._turn = replace(
+                    self._turn,
+                    envelope=replace(
+                        self._turn.envelope,
+                        host_thread_id=codex_session_id,
+                    ),
+                )
         self._emit(
             "BROKER_CODEX_THREAD_ATTACHED",
             session_id=session_id,
@@ -265,7 +280,9 @@ class BrokerRuntime:
             ).projection
             self._append_turn_event("turn_accepted", accepted)
             self._turn = projection
+            old, new, duration = self._apply(BrokerEvent.UTTERANCE_ENQUEUED)
             self._condition.notify_all()
+        self._emit_transition(old, new, duration)
         self._emit(
             "BROKER_TURN_ACCEPTED",
             session_id=session_id,
@@ -337,6 +354,110 @@ class BrokerRuntime:
             self._append_turn_event("dispatch_confirmed", confirmed)
             self._turn = reduction.projection
             return DispatchClaim(request_id, DispatchDisposition.CONFIRMED, False)
+
+    def accept_host_completion(self, response: CanonicalResponse) -> bool:
+        """Register one immutable host result and reject conflicting duplicates."""
+
+        with self._condition:
+            envelope = self._turn.envelope
+            if envelope is None or envelope.request_id != response.request_id:
+                raise BrokerError(
+                    BrokerErrorCode.INVALID_REQUEST,
+                    "completion request is not the active broker turn",
+                )
+            if self._turn.state is TurnState.HOST_COMPLETED:
+                if self._turn.response != response:
+                    raise BrokerError(
+                        BrokerErrorCode.INVALID_REQUEST,
+                        "completion conflicts with the canonical response",
+                    )
+                return False
+            reduction = reduce_turn(
+                self._turn,
+                TurnEvent(TurnEventKind.HOST_COMPLETED, response=response),
+            )
+            completed = reduction.projection.envelope
+            assert completed is not None
+            self._append_turn_event("host_completed", completed)
+            self._turn = reduction.projection
+            return True
+
+    def mark_visible_presented(self, request_id: str) -> bool:
+        """Claim visible output immediately before the caller writes it."""
+
+        with self._condition:
+            if self._turn.envelope is None or self._turn.envelope.request_id != request_id:
+                return False
+            if self._turn.presentation is not PresentationState.READY:
+                return False
+            reduction = reduce_turn(
+                self._turn,
+                TurnEvent(TurnEventKind.VISIBLE_PRESENTED),
+            )
+            visible = reduction.projection.envelope
+            assert visible is not None
+            self._append_turn_event("visible_presented", visible)
+            self._turn = reduction.projection
+            return True
+
+    def mark_tts_started(self, request_id: str) -> bool:
+        """Claim audio output immediately before playback begins."""
+
+        with self._condition:
+            if self._turn.envelope is None or self._turn.envelope.request_id != request_id:
+                return False
+            if self._turn.presentation is not PresentationState.VISIBLE:
+                return False
+            reduction = reduce_turn(self._turn, TurnEvent(TurnEventKind.TTS_STARTED))
+            started = reduction.projection.envelope
+            assert started is not None
+            self._append_turn_event("tts_started", started)
+            self._turn = reduction.projection
+            return True
+
+    def finish_tts(self, request_id: str, *, failed: bool = False) -> bool:
+        """Record the terminal playback outcome without authorizing a retry."""
+
+        with self._condition:
+            if self._turn.envelope is None or self._turn.envelope.request_id != request_id:
+                return False
+            if self._turn.presentation is not PresentationState.TTS_STARTED:
+                return False
+            event_kind = TurnEventKind.TTS_FAILED if failed else TurnEventKind.TTS_COMPLETED
+            reduction = reduce_turn(self._turn, TurnEvent(event_kind))
+            finished = reduction.projection.envelope
+            assert finished is not None
+            self._append_turn_event(
+                "tts_failed" if failed else "tts_completed",
+                finished,
+            )
+            self._turn = reduction.projection
+            return True
+
+    def mark_dispatch_uncertain(self, request_id: str) -> bool:
+        """Archive an unproven host outcome so it can never be resubmitted."""
+
+        with self._condition:
+            envelope = self._turn.envelope
+            if envelope is None or envelope.request_id != request_id:
+                return False
+            if self._turn.state is TurnState.RECOVERY_UNCERTAIN:
+                return False
+            if self._turn.state not in {
+                TurnState.DISPATCH_REQUESTED,
+                TurnState.DISPATCHED,
+            }:
+                return False
+            reduction = reduce_turn(
+                self._turn,
+                TurnEvent(TurnEventKind.RECOVERY_UNCERTAIN),
+            )
+            uncertain = reduction.projection.envelope
+            assert uncertain is not None
+            self._append_turn_event("recovery_uncertain", uncertain)
+            self._recovered_dispatches[request_id] = DispatchDisposition.UNCERTAIN
+            self._turn = TurnProjection()
+            return True
 
     def wait_for_turn(
         self,

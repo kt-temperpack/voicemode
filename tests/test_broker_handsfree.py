@@ -48,12 +48,17 @@ class FakeCodex:
     def __init__(self):
         self.prompts = []
 
-    def run_turn(self, prompt):
+    def run_turn(self, prompt, *, request_id=None, on_started=None):
         self.prompts.append(prompt)
-        return SimpleNamespace(
+        if on_started is not None:
+            on_started()
+        return handsfree_module.CodexTurn(
             display_text=f"full:{prompt}",
-            spoken_summary=f"short:{prompt}",
+            spoken_summary=f"full:{prompt}",
             thread_id=self.thread_id,
+            request_id=request_id,
+            host_turn_id=f"host-{request_id}",
+            completed_at=datetime.now(timezone.utc),
         )
 
 
@@ -175,6 +180,9 @@ def test_auto_adapter_uses_native_app_server_and_exact_thread(monkeypatch, tmp_p
 
         def start(self):
             calls.append("audio-start")
+
+        async def speak(self, message):
+            calls.append(("speak", message))
 
         def close(self):
             calls.append("audio-close")

@@ -33,6 +33,7 @@ def make_runtime(tmp_path, *, journal=None, ids=None):
         journal=journal,
     )
     session = runtime.open_session("thread-1", str(tmp_path))
+    runtime.activate(session.session_id)
     return runtime, session
 
 

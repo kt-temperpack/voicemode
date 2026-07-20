@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+
+from .types import CanonicalResponse
 
 
 class CodexTurnError(RuntimeError):
@@ -19,6 +23,22 @@ class CodexTurn:
     display_text: str
     spoken_summary: str
     thread_id: str
+    request_id: str | None = None
+    host_turn_id: str | None = None
+    completed_at: datetime | None = None
+
+    def canonical_response(self, request_id: str) -> CanonicalResponse:
+        if self.request_id is not None and self.request_id != request_id:
+            raise CodexTurnError("Codex response request identity changed")
+        return CanonicalResponse(
+            schema_version=1,
+            request_id=request_id,
+            thread_id=self.thread_id,
+            display_text=self.display_text,
+            spoken_text=self.spoken_summary,
+            host_turn_id=self.host_turn_id or f"exec-{request_id}",
+            completed_at=self.completed_at or datetime.now(timezone.utc),
+        )
 
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
@@ -128,7 +148,13 @@ class CodexAdapter:
             if isinstance(event, dict):
                 self.event_sink(event)
 
-    def run_turn(self, prompt: str) -> CodexTurn:
+    def run_turn(
+        self,
+        prompt: str,
+        *,
+        request_id: str | None = None,
+        on_started: Callable[[], None] | None = None,
+    ) -> CodexTurn:
         if not prompt.strip():
             raise ValueError("prompt must not be empty")
         with tempfile.TemporaryDirectory(prefix="voicemode-codex-") as temp_dir:
@@ -172,7 +198,27 @@ class CodexAdapter:
                 response = payload.get("response")
                 if isinstance(response, str) and response.strip():
                     response = response.strip()
-                    return CodexTurn(response, _fallback_summary(response), self.thread_id)
+                    if on_started is not None:
+                        on_started()
+                    identity = request_id or str(uuid.uuid4())
+                    return CodexTurn(
+                        response,
+                        _fallback_summary(response),
+                        self.thread_id,
+                        identity,
+                        f"exec-{identity}",
+                        datetime.now(timezone.utc),
+                    )
             if not raw:
                 raise CodexTurnError("Codex returned an empty final response")
-            return CodexTurn(raw, _fallback_summary(raw), self.thread_id)
+            if on_started is not None:
+                on_started()
+            identity = request_id or str(uuid.uuid4())
+            return CodexTurn(
+                raw,
+                _fallback_summary(raw),
+                self.thread_id,
+                identity,
+                f"exec-{identity}",
+                datetime.now(timezone.utc),
+            )

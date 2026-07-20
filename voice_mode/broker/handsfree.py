@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable
 
 from .audio import PersistentVoiceAudio
-from .codex import CodexAdapter, CodexTurn, CodexTurnError, _fallback_summary
+from .codex import CodexAdapter, CodexTurn, CodexTurnError
 from .hosts import (
     AppServerHostAdapter,
     AppServerTransport,
@@ -20,6 +20,7 @@ from .hosts import (
 )
 from .runtime import BrokerRuntime
 from .server import create_broker
+from .presentation import Presenter
 from .types import HostEvent, HostEventKind
 
 
@@ -65,10 +66,16 @@ class AppServerCodexRunner:
             self._terminal.setdefault(event.request_id, event)
             self._condition.notify_all()
 
-    def run_turn(self, prompt: str) -> CodexTurn:
+    def run_turn(
+        self,
+        prompt: str,
+        *,
+        request_id: str | None = None,
+        on_started: Callable[[], None] | None = None,
+    ) -> CodexTurn:
         if not prompt.strip():
             raise ValueError("prompt must not be empty")
-        request_id = str(uuid.uuid4())
+        request_id = request_id or str(uuid.uuid4())
         try:
             started = self.adapter.start_turn(
                 request_id=request_id,
@@ -78,6 +85,8 @@ class AppServerCodexRunner:
         except HostAdapterError as error:
             raise CodexTurnError(str(error)) from error
         self._active_turn_id = started.host_turn_id
+        if on_started is not None:
+            on_started()
         with self._condition:
             ready = self._condition.wait_for(
                 lambda: request_id in self._terminal,
@@ -96,7 +105,14 @@ class AppServerCodexRunner:
         text = event.completion.display_text.strip()
         if not text:
             raise CodexTurnError("Codex returned an empty final response")
-        return CodexTurn(text, _fallback_summary(text), self.thread_id)
+        return CodexTurn(
+            text,
+            event.completion.spoken_text,
+            self.thread_id,
+            request_id,
+            event.completion.host_turn_id,
+            event.completion.completed_at,
+        )
 
     def steer(self, prompt: str) -> None:
         if self._active_turn_id is None:
@@ -169,6 +185,11 @@ class HandsFreeLoop:
         self.display = display
         self._codex: CodexAdapter | None = None
         self._shown_codex_thread: str | None = None
+        self._presenter = Presenter(
+            runtime,
+            display=lambda text: self.display(f"\nCodex:\n{text}\n"),
+            speak=audio.speak,
+        )
 
     def _close_session(self, session_id: str | None) -> None:
         if session_id is None:
@@ -242,13 +263,28 @@ class HandsFreeLoop:
                 self.runtime.begin_shutdown()
                 return
 
-            self.runtime.enqueue_utterance(session_id, pending)
-            utterance = self.runtime.wait_for_turn(session_id, 0)
-            assert utterance is not None
+            active_session = self.runtime.snapshot().session
+            assert active_session is not None
+            envelope = self.runtime.accept_turn(
+                session_id,
+                pending,
+                host_adapter=self.adapter_kind,
+                host_thread_id=active_session.codex_session_id,
+            )
+            assert envelope.request_id is not None
+            claim = self.runtime.claim_dispatch(envelope.request_id)
+            if not claim.should_dispatch:
+                raise RuntimeError("accepted broker turn did not receive dispatch authority")
             self.display("Codex: working…")
             try:
-                turn = await asyncio.to_thread(self._codex.run_turn, utterance.text)
+                turn = await asyncio.to_thread(
+                    self._codex.run_turn,
+                    envelope.transcript,
+                    request_id=envelope.request_id,
+                    on_started=lambda: self.runtime.confirm_dispatch(envelope.request_id),
+                )
             except CodexTurnError as error:
+                self.runtime.mark_dispatch_uncertain(envelope.request_id)
                 self.display(f"Codex error: {error}")
                 self._close_session(session_id)
                 session_id = None
@@ -264,9 +300,9 @@ class HandsFreeLoop:
                 self._shown_codex_thread = turn.thread_id
                 self.display(f"Codex thread: {turn.thread_id}")
                 self.display(f"Open it later: codex resume {turn.thread_id}")
+            self.runtime.confirm_dispatch(envelope.request_id)
             self.runtime.accept_summary(session_id, turn.spoken_summary)
-            self.display(f"\nCodex:\n{turn.display_text}\n")
-            await self.audio.speak(turn.spoken_summary)
+            await self._presenter.present(turn.canonical_response(envelope.request_id))
             await self.audio.cue_listening()
             pending = await self._listen_safely()
             if self.runtime.snapshot().shutting_down:

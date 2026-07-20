@@ -35,6 +35,7 @@ from .types import (
     TurnReduction,
     TurnState,
 )
+from .presentation import Presenter
 
 __all__ = [
     "BrokerCapabilities",
@@ -61,6 +62,7 @@ __all__ = [
     "InvalidTurnTransition",
     "PendingUtterance",
     "PresentationState",
+    "Presenter",
     "ResultKind",
     "SessionInfo",
     "TurnEnvelope",
