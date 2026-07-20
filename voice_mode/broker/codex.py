@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 import subprocess
 import tempfile
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -105,6 +108,54 @@ class CodexAdapter:
         self.runner = runner
         self.event_sink = event_sink
         self.thread_id: str | None = None
+        self._process_lock = threading.Lock()
+        self._active_process: subprocess.Popen | None = None
+
+    def _execute(self, command: list[str]) -> subprocess.CompletedProcess[str]:
+        if self.runner is not subprocess.run:
+            return self.runner(
+                command,
+                cwd=self.repo_root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        options = {
+            "cwd": self.repo_root,
+            "text": True,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+        }
+        if os.name == "nt":
+            options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            options["start_new_session"] = True
+        process = subprocess.Popen(command, **options)
+        with self._process_lock:
+            self._active_process = process
+        try:
+            stdout, stderr = process.communicate()
+            return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        finally:
+            with self._process_lock:
+                if self._active_process is process:
+                    self._active_process = None
+
+    def cancel_active(self) -> bool:
+        """Terminate the active Codex process group without presenting partial output."""
+
+        with self._process_lock:
+            process = self._active_process
+        if process is None or process.poll() is not None:
+            return False
+        try:
+            if os.name == "nt":
+                process.send_signal(signal.CTRL_BREAK_EVENT)
+            else:
+                os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+        except (OSError, ProcessLookupError):
+            return False
+        return True
 
     def _command(self, prompt: str, schema_path: Path, output_path: Path) -> list[str]:
         shared = [
@@ -164,20 +215,22 @@ class CodexAdapter:
             schema_path.write_text(json.dumps(_RESPONSE_SCHEMA), encoding="utf-8")
             command = self._command(prompt, schema_path, output_path)
             try:
-                completed = self.runner(
-                    command,
-                    cwd=self.repo_root,
-                    text=True,
-                    capture_output=True,
-                    check=False,
-                )
+                completed = self._execute(command)
             except FileNotFoundError as exc:
                 raise CodexTurnError(f"Codex executable not found: {self.executable}") from exc
 
             self._emit_events(completed.stdout)
             if completed.returncode != 0:
                 detail = (completed.stderr or completed.stdout or "Codex exited without details").strip()
-                raise CodexTurnError(detail[-1000:])
+                resume = (
+                    f"codex resume {self.thread_id}"
+                    if self.thread_id
+                    else f"codex --cd {self.repo_root}"
+                )
+                raise CodexTurnError(
+                    f"{self.executable} failed in {self.repo_root} with exit status "
+                    f"{completed.returncode}: {detail[-700:]}. Retry with: {resume}"
+                )
 
             started_thread = _parse_thread_id(completed.stdout)
             if started_thread:

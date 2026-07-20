@@ -18,6 +18,7 @@ from .app_server_transport import (
 )
 from .app_server import AppServerHostAdapter
 from .events import AppServerEventMapper
+from .exec import ExecCodexAdapter
 from .selection import (
     ThreadSelection,
     ThreadSelectionSource,
@@ -40,6 +41,7 @@ __all__ = [
     "AppServerTransportError",
     "AppServerHostAdapter",
     "AppServerEventMapper",
+    "ExecCodexAdapter",
     "ThreadSelection",
     "ThreadSelectionSource",
     "canonical_repo_root",
