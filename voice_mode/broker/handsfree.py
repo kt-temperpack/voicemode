@@ -210,6 +210,22 @@ def wake_command(text: str, wake_phrase: str) -> str | None:
     hey_match = re.match(r"^hey\b", normalized, flags=re.IGNORECASE)
     if hey_match:
         normalized = normalized[hey_match.end() :].lstrip(" \t,;:.!?…—–-")
+    else:
+        # Whisper sometimes renders a clearly separated "Hey Computer" as
+        # "A computer."  Accept that narrow form without making ordinary
+        # sentences such as "A computer can..." wake the broker.
+        article_match = re.match(r"^a\b", normalized, flags=re.IGNORECASE)
+        if article_match:
+            candidate = normalized[article_match.end() :].lstrip(" \t,;:.!?…—–-")
+            wake_end = len(wake_phrase)
+            if (
+                candidate[:wake_end].casefold() == wake_phrase.casefold()
+                and (
+                    len(candidate) == wake_end
+                    or candidate[wake_end] in ",;:.!?…—–-"
+                )
+            ):
+                normalized = candidate
 
     if not normalized.casefold().startswith(wake_phrase.casefold()):
         return None
@@ -411,6 +427,7 @@ class HandsFreeLoop:
                     else wake_command(heard, self.wake_phrase)
                 )
                 if pending is None:
+                    self.display("Not submitted: wake phrase was not detected")
                     continue
                 if not pending:
                     self.display("Wake accepted; listening for your request…")

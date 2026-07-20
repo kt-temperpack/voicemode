@@ -68,6 +68,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Broker supervision now installs deterministic launchd or systemd user
   services with restart backoff, stable logs, liveness-based idempotent start,
   and stop semantics that preserve configuration, journals, and user data.
+  Wake recognition now accepts Whisper's punctuated `A computer.` rendering of
+  `Hey Computer` without accepting ordinary `A computer can...` sentences, and
+  rejected ambient transcripts explicitly say they were not submitted.
   Canonical `voicemode start`, `voicemode stop`, and `voicemode restart`
   commands now control that service with deterministic human and JSON output,
   stable exit categories, and exact corrections for common command mistakes;

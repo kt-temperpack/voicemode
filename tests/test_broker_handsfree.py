@@ -162,6 +162,8 @@ def test_wake_and_control_parsing_is_strict():
     assert wake_command("Hey computer! Check tests", "Computer") == "Check tests"
     assert wake_command("\u200bHey computer—check tests", "Computer") == "check tests"
     assert wake_command("Hey computer… check tests", "Computer") == "check tests"
+    assert wake_command("A computer. Continue working", "Computer") == "Continue working"
+    assert wake_command("A computer can help", "Computer") is None
     assert wake_command("computer", "Computer") == ""
     assert wake_command("computerized", "Computer") is None
     assert wake_command("my computer is slow", "Computer") is None
@@ -350,6 +352,7 @@ async def test_loop_ignores_ambient_then_reuses_codex_for_followup(tmp_path):
     await loop.run()
 
     assert codex.prompts == ["inspect the repo", "run focused tests"]
+    assert "Not submitted: wake phrase was not detected" in displayed
     assert any("full:inspect the repo" in line for line in displayed)
     assert "Codex thread: codex-1" in displayed
     assert "Open it later: codex resume codex-1" in displayed
