@@ -1,6 +1,6 @@
 # GPT-Realtime Codex Operator Design
 
-**Status:** Approved direction; pending written-spec review
+**Status:** Approved for implementation; reviewed plan complete
 
 **Date:** 2026-07-20
 
@@ -148,9 +148,10 @@ explicit setting; the page itself does not persist content.
 
 The browser posts its SDP offer to the local broker. In this first slice, the
 broker proxies the SDP exchange with its server-side OpenAI credential instead
-of minting a browser-visible ephemeral token. It returns the SDP answer,
-extracts the call identifier from the response `Location` header, and attaches
-the sideband WebSocket to that call. This follows OpenAI's documented
+of minting a browser-visible ephemeral token. It extracts the call identifier
+from the response `Location` header, attaches and configures the sideband
+WebSocket, then returns the SDP answer so microphone media is never connected to
+an ungoverned call. This follows OpenAI's documented
 server-control topology, keeps the standard credential out of browser storage
 and developer tools, and stays simpler than a second token-minting path while
 the client is loopback-only.
@@ -158,9 +159,10 @@ the client is loopback-only.
 The initial session profile is:
 
 - model `gpt-realtime-2.1`, configurable only through validated broker config;
-- audio and text output, defaulting to one supported OpenAI session voice from
-  validated broker config and allowing another supported voice only before the
-  first audio response;
+- audio output with provider output-transcript events supplying visible text,
+  defaulting to one supported OpenAI session voice from validated broker config
+  at `1.25` speed, allowing another supported voice only before the first audio
+  response and a validated speed change only between responses;
 - semantic VAD with low eagerness;
 - interruption enabled and automatic response creation disabled, so the
   response arbiter owns every `response.create` event;
@@ -199,10 +201,11 @@ does not replay its remainder. A later user request to repeat is a new response,
 not a retry of the interrupted audio stream.
 
 Worker completion never talks over the user. If speech or a response is active,
-the event waits. At the next idle boundary, the broker adds one clearly marked
-worker-event item to the conversation and requests a brief integration from the
-operator. The UI may show progress immediately even while spoken integration is
-deferred.
+the event waits. At the next idle boundary, the broker creates one out-of-band,
+tool-disabled response with bounded worker data as response-local input. Neither
+that input nor its spoken output enters the default conversation, and the
+dispatcher independently rejects worker-caused tool calls. The UI may show
+progress immediately even while spoken integration is deferred.
 
 ### 4. Bounded Operator Tools
 
@@ -262,12 +265,13 @@ result summary plus a reference to the complete visible output. Codex workers
 receive no voice tools and never invoke TTS, so they cannot create a second
 spoken response.
 
-The broker injects only a size-bounded status and summary, never an arbitrary
-worker transcript. Worker text is encoded as data with its job and thread IDs,
-and the operator instructions explicitly forbid treating it as session policy
-or tool authorization. All tool calls still pass deterministic allowlists, and
-Codex's own sandbox and approval policy remain authoritative; realtime mode
-does not create a voice shortcut around an approval prompt.
+The broker gives the isolated integration response only a size-bounded status
+and summary, never an arbitrary worker transcript. Worker text is encoded as
+data with its job and thread IDs, `conversation` is `none`, and `tool_choice` is
+`none`. The dispatcher also refuses any tool call caused by a worker delivery.
+All user-caused tool calls still pass deterministic allowlists, and Codex's own
+sandbox and approval policy remain authoritative; realtime mode does not create
+a voice shortcut around an approval prompt.
 
 The first slice permits one active Codex job. A second delegation returns a
 typed `busy` result with the active job ID, while steering, status, interruption,
@@ -319,18 +323,24 @@ and transcript text are excluded.
 4. App-server events advance the job while the Realtime session remains free
    for conversation, status requests, steering, or interruption.
 5. The terminal event is journaled first, shown in the UI, then queued for one
-   spoken integration at the next idle boundary.
-6. After successful injection, the journal marks the terminal event delivered;
-   reconnect and rollover cannot deliver it again.
+   isolated, tool-disabled spoken integration at the next idle boundary.
+6. After the out-of-band response is classified, the journal marks the terminal
+   event delivered or uncertain; reconnect and rollover cannot deliver it again.
 
 ## Failure and Recovery
 
 - **Realtime connection loss:** Keep Codex jobs alive, mark the voice session
-  disconnected, reconnect with bounded backoff, and rehydrate active job state.
-  Never replay terminal speech merely because the transport reconnected.
+  disconnected, disable microphone eligibility, try a bounded best-effort
+  sideband reattach, and otherwise roll to a fresh call. The page must
+  acknowledge that its track is disabled; if it cannot, the broker uses the
+  authenticated WebRTC hangup endpoint before releasing the audio lease.
+  Rehydrate active job state, and never replay terminal speech merely because
+  transport returned.
 - **Browser closes or loses microphone permission:** Stop cloud audio
-  immediately. The sideband remains for a short grace period so a Codex job can
-  finish and journal its result, then closes the Realtime call.
+  immediately. Bidirectional heartbeat/keepalive expiry covers silent page or
+  broker death when `pagehide` never runs. The sideband remains for a short grace
+  period so a Codex job can finish and journal its result, then closes the
+  Realtime call.
 - **Codex app-server loss:** Mark the job `uncertain`, reconnect, and inspect the
   known thread and turn before retrying. An uncertain turn is never submitted
   again automatically.
@@ -467,6 +477,8 @@ The design relies on current OpenAI Realtime behavior documented in:
 - [Voice activity detection](https://developers.openai.com/api/docs/guides/realtime-vad)
 - [Realtime tools](https://developers.openai.com/api/docs/guides/realtime-mcp)
 - [Server-side controls and sideband connections](https://developers.openai.com/api/docs/guides/realtime-server-controls)
+- [Realtime API reference](https://developers.openai.com/api/reference/resources/realtime)
+- [Realtime call hangup](https://developers.openai.com/api/reference/resources/realtime/subresources/calls/methods/hangup)
 
 These details must be covered by an adapter-level contract test or a documented
 manual compatibility check because model names, session fields, and event
