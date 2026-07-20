@@ -1,0 +1,18 @@
+[Unit]
+Description=VoiceMode hands-free conversation broker
+After=default.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+ExecStart=/Users/tester/.voicemode/services/broker/bin/start-voicemode-broker.sh
+Restart=always
+RestartSec=5
+Environment="PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin"
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=voicemode-broker
+
+[Install]
+WantedBy=default.target

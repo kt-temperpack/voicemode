@@ -3,6 +3,7 @@
 from .cues import CueDisposition, CueKind, CuePolicy, CueRecord, cue_for_event
 from .presentation import Presenter, TerminalMode, TerminalPresenter
 from .state import InvalidTransition, project_broker_phase, transition
+from .supervisor import BrokerSupervisor, LifecycleResult, SupervisorState
 from .turns import InvalidTurnTransition, reduce_turn
 from .types import (
     BrokerCapabilities,
@@ -45,6 +46,7 @@ __all__ = [
     "BrokerEvent",
     "BrokerPhase",
     "BrokerSnapshot",
+    "BrokerSupervisor",
     "CanonicalResponse",
     "CueDisposition",
     "CueKind",
@@ -66,6 +68,7 @@ __all__ = [
     "HostTurnState",
     "InvalidTransition",
     "InvalidTurnTransition",
+    "LifecycleResult",
     "PendingUtterance",
     "PresentationState",
     "Presenter",
@@ -73,6 +76,7 @@ __all__ = [
     "TerminalPresenter",
     "ResultKind",
     "SessionInfo",
+    "SupervisorState",
     "TurnEnvelope",
     "TurnEvent",
     "TurnEventKind",

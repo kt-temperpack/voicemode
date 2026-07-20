@@ -106,6 +106,7 @@ def test_systemd_templates_use_restart_always_not_on_failure():
         templates_dir / "voicemode-kokoro.service",
         templates_dir / "voicemode-whisper.service",
         templates_dir / "voicemode-serve.service",
+        templates_dir / "voicemode-broker.service",
     ]
 
     for unit_path in units:

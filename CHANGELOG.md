@@ -65,6 +65,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A privacy-safe broker audio qualifier now summarizes monotonic latency
   observations as p50/p95/max, enforces every published budget, records
   environment metadata, and runs a 100-turn single-owner resource soak.
+  Broker supervision now installs deterministic launchd or systemd user
+  services with restart backoff, stable logs, liveness-based idempotent start,
+  and stop semantics that preserve configuration, journals, and user data.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default
