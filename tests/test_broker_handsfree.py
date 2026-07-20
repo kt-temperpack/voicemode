@@ -7,9 +7,8 @@ from voice_mode.broker.runtime import BrokerRuntime
 
 
 class FakeAudio:
-    def __init__(self, listens, exchanges):
+    def __init__(self, listens):
         self.listens = iter(listens)
-        self.exchanges = iter(exchanges)
         self.spoken = []
 
     async def listen(self):
@@ -17,11 +16,6 @@ class FakeAudio:
 
     async def speak(self, message):
         self.spoken.append(message)
-
-    async def exchange(self, message):
-        self.spoken.append(message)
-        return next(self.exchanges)
-
 
 class FakeCodex:
     thread_id = "codex-1"
@@ -50,10 +44,7 @@ def test_wake_and_control_parsing_is_strict():
 
 @pytest.mark.asyncio
 async def test_loop_ignores_ambient_then_reuses_codex_for_followup(tmp_path):
-    audio = FakeAudio(
-        listens=["ambient speech", "Computer, inspect the repo"],
-        exchanges=["run focused tests", "go to sleep"],
-    )
+    audio = FakeAudio([])
     codex = FakeCodex()
     displayed = []
     runtime = BrokerRuntime()
@@ -67,7 +58,15 @@ async def test_loop_ignores_ambient_then_reuses_codex_for_followup(tmp_path):
     )
 
     # A third wake exits after proving the sleep transition.
-    audio.listens = iter(["ambient speech", "Computer, inspect the repo", "Computer, exit voice mode"])
+    audio.listens = iter(
+        [
+            "ambient speech",
+            "Computer, inspect the repo",
+            "run focused tests",
+            "go to sleep",
+            "Computer, exit voice mode",
+        ]
+    )
     await loop.run()
 
     assert codex.prompts == ["inspect the repo", "run focused tests"]
@@ -76,3 +75,23 @@ async def test_loop_ignores_ambient_then_reuses_codex_for_followup(tmp_path):
     assert "Open it later: codex resume codex-1" in displayed
     assert runtime.snapshot().shutting_down is True
     assert runtime.snapshot().session is None
+
+
+@pytest.mark.asyncio
+async def test_transcription_failure_does_not_crash_loop(tmp_path):
+    class FailingAudio(FakeAudio):
+        async def listen(self):
+            raise TimeoutError("local STT timed out")
+
+    displayed = []
+    loop = HandsFreeLoop(
+        repo_root=tmp_path,
+        runtime=BrokerRuntime(),
+        audio=FailingAudio([]),
+        wake_phrase="Computer",
+        codex_factory=lambda _root: FakeCodex(),
+        display=displayed.append,
+    )
+
+    assert await loop._listen_safely() is None
+    assert displayed == ["Voice input error: local STT timed out"]

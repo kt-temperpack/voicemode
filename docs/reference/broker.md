@@ -31,6 +31,13 @@ return to wake-only listening, or say `exit voice mode` to stop. The default
 voice is the local `am_michael` voice. Use `--repo`, `--voice`, `--wake-phrase`,
 and `--listen-duration` to override the everyday defaults.
 
+Hands-free turns default to `gpt-5.6-terra` with low reasoning so conversational
+responses don't inherit a slower interactive Codex profile. Override that lane
+with `VOICEMODE_BROKER_CODEX_MODEL` and
+`VOICEMODE_BROKER_CODEX_REASONING_EFFORT`. The broker also uses a 650 ms
+end-of-speech threshold, configurable with
+`VOICEMODE_BROKER_SILENCE_THRESHOLD_MS`.
+
 The broker starts its own resumable `codex exec` thread in the selected
 repository. It does not attach to an already-open Codex UI conversation, so the
 voice transcript lives in the broker terminal while file changes land in the
@@ -71,7 +78,9 @@ an owner-controlled path with `--socket`.
 Configuration is environment-backed: `VOICEMODE_BROKER_WAKE_PHRASE`,
 `VOICEMODE_BROKER_VOICE`, `VOICEMODE_BROKER_LISTEN_DURATION_SECONDS`,
 `VOICEMODE_BROKER_MIN_LISTEN_DURATION_SECONDS`,
-`VOICEMODE_BROKER_CODEX_EXECUTABLE`, and `VOICEMODE_BROKER_CODEX_SANDBOX`.
+`VOICEMODE_BROKER_SILENCE_THRESHOLD_MS`, `VOICEMODE_BROKER_CODEX_EXECUTABLE`,
+`VOICEMODE_BROKER_CODEX_MODEL`, `VOICEMODE_BROKER_CODEX_REASONING_EFFORT`, and
+`VOICEMODE_BROKER_CODEX_SANDBOX`.
 Repository-scoped long-term memory and optional wake-model evaluation remain
 later slices; normal Codex session context already persists across follow-ups.
 Wake-listener audio is sent only to a configured local STT endpoint and never

@@ -20,7 +20,6 @@ from voice_mode.config import (
     CHANNELS,
     OPENAI_API_KEY,
     SAMPLE_RATE,
-    SILENCE_THRESHOLD_MS,
     STT_BASE_URLS,
     VAD_AGGRESSIVENESS,
     VAD_CHUNK_DURATION_MS,
@@ -97,6 +96,7 @@ class PersistentVoiceAudio:
         listening_cue_callable: CueCallable = _play_listening_cue,
         submitted_cue_callable: CueCallable = _play_submitted_cue,
         cues_enabled: bool = AUDIO_FEEDBACK_ENABLED,
+        silence_threshold_ms: int = 650,
     ) -> None:
         self.voice = voice
         self.listen_duration = listen_duration
@@ -108,6 +108,7 @@ class PersistentVoiceAudio:
         self._listening_cue_callable = listening_cue_callable
         self._submitted_cue_callable = submitted_cue_callable
         self._cues_enabled = cues_enabled
+        self._silence_threshold_ms = silence_threshold_ms
         self._queue: queue.Queue[np.ndarray] = queue.Queue()
         self._muted = threading.Event()
         self._muted.set()
@@ -196,7 +197,7 @@ class PersistentVoiceAudio:
                 else:
                     silence_ms += VAD_CHUNK_DURATION_MS
                 speech_seconds = time.monotonic() - speech_started_at
-                if speech_seconds >= self.min_duration and silence_ms >= SILENCE_THRESHOLD_MS:
+                if speech_seconds >= self.min_duration and silence_ms >= self._silence_threshold_ms:
                     break
         finally:
             self._muted.set()

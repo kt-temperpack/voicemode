@@ -75,7 +75,7 @@ class HandsFreeLoop:
 
         while not self.runtime.snapshot().shutting_down:
             if session_id is None:
-                heard = await self.audio.listen()
+                heard = await self._listen_safely()
                 if not heard:
                     continue
                 self.display(f"You: {heard}")
@@ -84,7 +84,7 @@ class HandsFreeLoop:
                     continue
                 if not pending:
                     await self.audio.speak("I'm listening.")
-                    pending = await self.audio.listen()
+                    pending = await self._listen_safely()
                     if not pending:
                         continue
                     self.display(f"You: {pending}")
@@ -136,7 +136,8 @@ class HandsFreeLoop:
                 self.display(f"Open it later: codex resume {turn.thread_id}")
             self.runtime.accept_summary(session_id, turn.spoken_summary)
             self.display(f"\nCodex:\n{turn.display_text}\n")
-            pending = await self.audio.exchange(turn.spoken_summary)
+            await self.audio.speak(turn.spoken_summary)
+            pending = await self._listen_safely()
             if self.runtime.snapshot().shutting_down:
                 return
             self.runtime.finish_playback(session_id)
@@ -150,6 +151,13 @@ class HandsFreeLoop:
 
         self._close_session(session_id)
 
+    async def _listen_safely(self) -> str | None:
+        try:
+            return await self.audio.listen()
+        except Exception as error:
+            self.display(f"Voice input error: {error}")
+            return None
+
 
 def run_handsfree_broker(
     socket_path: Path,
@@ -161,6 +169,9 @@ def run_handsfree_broker(
     min_duration: float,
     codex_executable: str,
     codex_sandbox: str,
+    codex_model: str,
+    codex_reasoning_effort: str,
+    silence_threshold_ms: int,
 ) -> None:
     runtime, _dispatcher, server = create_broker(socket_path, audio_enabled=True)
     server.start()
@@ -170,6 +181,7 @@ def run_handsfree_broker(
         voice=voice,
         listen_duration=listen_duration,
         min_duration=min_duration,
+        silence_threshold_ms=silence_threshold_ms,
     )
     audio.start()
     loop = HandsFreeLoop(
@@ -181,6 +193,8 @@ def run_handsfree_broker(
             root,
             executable=codex_executable,
             sandbox=codex_sandbox,
+            model=codex_model,
+            reasoning_effort=codex_reasoning_effort,
         ),
     )
     try:

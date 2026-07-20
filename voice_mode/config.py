@@ -732,10 +732,17 @@ BROKER_LISTEN_DURATION_SECONDS = _bounded_env_number(
 BROKER_MIN_LISTEN_DURATION_SECONDS = _bounded_env_number(
     "VOICEMODE_BROKER_MIN_LISTEN_DURATION_SECONDS", 1.0, 0.0, 10.0, float
 )
+BROKER_SILENCE_THRESHOLD_MS = _bounded_env_number(
+    "VOICEMODE_BROKER_SILENCE_THRESHOLD_MS", 650, 250, 2_000, int
+)
 BROKER_CODEX_EXECUTABLE = os.getenv("VOICEMODE_BROKER_CODEX_EXECUTABLE", "codex").strip() or "codex"
 BROKER_CODEX_SANDBOX = os.getenv("VOICEMODE_BROKER_CODEX_SANDBOX", "workspace-write").strip()
 if BROKER_CODEX_SANDBOX not in {"read-only", "workspace-write", "danger-full-access"}:
     BROKER_CODEX_SANDBOX = "workspace-write"
+BROKER_CODEX_MODEL = os.getenv("VOICEMODE_BROKER_CODEX_MODEL", "gpt-5.6-terra").strip() or "gpt-5.6-terra"
+BROKER_CODEX_REASONING_EFFORT = os.getenv("VOICEMODE_BROKER_CODEX_REASONING_EFFORT", "low").strip()
+if BROKER_CODEX_REASONING_EFFORT not in {"low", "medium", "high", "xhigh", "max", "ultra"}:
+    BROKER_CODEX_REASONING_EFFORT = "low"
 
 # Hardening (F4 / VM-1697): a `pause` holds the global audio lock while playback
 # waits, so a pause that is never resumed (a forgotten/buggy trigger, or a

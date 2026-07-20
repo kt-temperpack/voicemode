@@ -12,9 +12,12 @@ from voice_mode.broker.client import BrokerClient, BrokerUnavailable
 from voice_mode.broker.server import run_broker
 from voice_mode.config import (
     BROKER_CODEX_EXECUTABLE,
+    BROKER_CODEX_MODEL,
+    BROKER_CODEX_REASONING_EFFORT,
     BROKER_CODEX_SANDBOX,
     BROKER_LISTEN_DURATION_SECONDS,
     BROKER_MIN_LISTEN_DURATION_SECONDS,
+    BROKER_SILENCE_THRESHOLD_MS,
     BROKER_SOCKET_PATH,
     BROKER_VOICE,
     BROKER_WAKE_PHRASE,
@@ -73,6 +76,9 @@ def broker_run(
                 min_duration=BROKER_MIN_LISTEN_DURATION_SECONDS,
                 codex_executable=BROKER_CODEX_EXECUTABLE,
                 codex_sandbox=BROKER_CODEX_SANDBOX,
+                codex_model=BROKER_CODEX_MODEL,
+                codex_reasoning_effort=BROKER_CODEX_REASONING_EFFORT,
+                silence_threshold_ms=BROKER_SILENCE_THRESHOLD_MS,
             )
     except OSError as error:
         raise click.ClickException(

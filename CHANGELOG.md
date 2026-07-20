@@ -19,7 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   holds one microphone stream open instead of toggling CoreAudio per listen
   window, plays distinct listening-active and prompt-submitted cues, keeps
   wake-listener transcription local-only, and prints the full Codex thread ID
-  with its `codex resume` command after the first turn.
+  with its `codex resume` command after the first turn. The hands-free Codex
+  lane defaults to `gpt-5.6-terra` with low reasoning and a 650 ms end-of-speech
+  threshold for faster conversational turns, and transient local STT failures
+  no longer terminate the broker process.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default

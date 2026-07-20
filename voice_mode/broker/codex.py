@@ -69,18 +69,26 @@ class CodexAdapter:
         *,
         executable: str = "codex",
         sandbox: str = "workspace-write",
+        model: str = "gpt-5.6-terra",
+        reasoning_effort: str = "low",
         runner: Runner = subprocess.run,
         event_sink: Callable[[dict], None] | None = None,
     ) -> None:
         self.repo_root = Path(repo_root).resolve()
         self.executable = executable
         self.sandbox = sandbox
+        self.model = model
+        self.reasoning_effort = reasoning_effort
         self.runner = runner
         self.event_sink = event_sink
         self.thread_id: str | None = None
 
     def _command(self, prompt: str, schema_path: Path, output_path: Path) -> list[str]:
         shared = [
+            "--model",
+            self.model,
+            "--config",
+            f'model_reasoning_effort="{self.reasoning_effort}"',
             "--json",
             "--output-schema",
             str(schema_path),

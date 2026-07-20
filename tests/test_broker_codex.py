@@ -33,6 +33,8 @@ def test_first_turn_starts_thread_and_second_resumes(tmp_path):
     assert first.display_text == "Full answer"
     assert first.spoken_summary == "Short answer"
     assert calls[0][0][:2] == ["codex", "exec"]
+    assert calls[0][0][calls[0][0].index("--model") + 1] == "gpt-5.6-terra"
+    assert 'model_reasoning_effort="low"' in calls[0][0]
     assert "resume" not in calls[0][0]
     assert calls[1][0][2] == "resume"
     assert calls[1][0][-2:] == ["thread-123", "second"]
