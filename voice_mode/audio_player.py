@@ -7,6 +7,7 @@ concurrent audio streams without blocking or interference.
 import logging
 import queue
 import threading
+import time
 from typing import Optional
 
 import numpy as np
@@ -40,6 +41,8 @@ class NonBlockingAudioPlayer:
         self.stream: Optional[sd.OutputStream] = None
         self.playback_complete = threading.Event()
         self.playback_error: Optional[Exception] = None
+        self.cancellation_event: Optional[threading.Event] = None
+        self._stream_lock = threading.Lock()
 
     def _audio_callback(self, outdata, frames, time_info, status):
         """Callback function called by sounddevice for each audio buffer.
@@ -52,6 +55,11 @@ class NonBlockingAudioPlayer:
         """
         if status:
             logger.warning(f"Audio callback status: {status}")
+
+        if self.cancellation_event is not None and self.cancellation_event.is_set():
+            outdata[:] = 0
+            self.playback_complete.set()
+            raise sd.CallbackStop()
 
         try:
             # Get audio chunk from queue
@@ -91,7 +99,13 @@ class NonBlockingAudioPlayer:
             outdata[:] = 0
             logger.debug("Audio queue empty - outputting silence")
 
-    def play(self, samples: np.ndarray, sample_rate: int, blocking: bool = False):
+    def play(
+        self,
+        samples: np.ndarray,
+        sample_rate: int,
+        blocking: bool = False,
+        cancellation_event: Optional[threading.Event] = None,
+    ):
         """Play audio samples using non-blocking callback system.
 
         Args:
@@ -105,6 +119,10 @@ class NonBlockingAudioPlayer:
         # Reset state
         self.playback_complete.clear()
         self.playback_error = None
+        self.cancellation_event = cancellation_event
+        if cancellation_event is not None and cancellation_event.is_set():
+            self.playback_complete.set()
+            return
 
         # Ensure samples are float32
         if samples.dtype != np.float32:
@@ -129,14 +147,15 @@ class NonBlockingAudioPlayer:
 
         # Create and start output stream
         try:
-            self.stream = sd.OutputStream(
-                samplerate=sample_rate,
-                channels=channels,
-                callback=self._audio_callback,
-                blocksize=self.buffer_size,
-                dtype=np.float32
-            )
-            self.stream.start()
+            with self._stream_lock:
+                self.stream = sd.OutputStream(
+                    samplerate=sample_rate,
+                    channels=channels,
+                    callback=self._audio_callback,
+                    blocksize=self.buffer_size,
+                    dtype=np.float32,
+                )
+                self.stream.start()
 
             if blocking:
                 self.wait()
@@ -156,14 +175,17 @@ class NonBlockingAudioPlayer:
             Exception: If playback error occurred
         """
         # Wait for playback to complete
-        if not self.playback_complete.wait(timeout=timeout):
-            logger.warning("Playback wait timed out")
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while not self.playback_complete.wait(timeout=0.05):
+            if self.cancellation_event is not None and self.cancellation_event.is_set():
+                self.stop()
+                return
+            if deadline is not None and time.monotonic() >= deadline:
+                logger.warning("Playback wait timed out")
+                break
 
         # Stop and close stream
-        if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
+        self._close_stream()
 
         # Raise any error that occurred during playback
         if self.playback_error:
@@ -172,10 +194,7 @@ class NonBlockingAudioPlayer:
     def stop(self):
         """Stop playback immediately."""
         self.playback_complete.set()
-        if self.stream:
-            self.stream.stop()
-            self.stream.close()
-            self.stream = None
+        self._close_stream()
 
         # Clear queue
         if self.audio_queue:
@@ -184,3 +203,10 @@ class NonBlockingAudioPlayer:
                     self.audio_queue.get_nowait()
                 except queue.Empty:
                     break
+
+    def _close_stream(self):
+        with self._stream_lock:
+            stream, self.stream = self.stream, None
+        if stream is not None:
+            stream.stop()
+            stream.close()

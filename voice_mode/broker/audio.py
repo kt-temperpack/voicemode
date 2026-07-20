@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import io
 import queue
-import threading
 import time
 from collections import deque
 from typing import Awaitable, Callable
@@ -27,6 +26,7 @@ from voice_mode.config import (
 from voice_mode.provider_discovery import is_local_provider
 
 from .endpointing import EndpointDecision, EndpointDetector, FrameMetadata
+from .audio_session import AudioSession
 
 
 SpeakCallable = Callable[[str, str, float], Awaitable[None]]
@@ -50,8 +50,9 @@ def _clean_transcript(text: str) -> str | None:
     return cleaned
 
 
-async def _speak_local(message: str, voice: str, speed: float = 1.25) -> None:
-    from voice_mode.audio_player import NonBlockingAudioPlayer
+async def _synthesize_local(
+    message: str, voice: str, speed: float = 1.25
+) -> tuple[np.ndarray, int]:
     from voice_mode.tools.converse import synthesize_turn_with_failover
 
     success, samples, sample_rate, _metrics, _config = await synthesize_turn_with_failover(
@@ -61,6 +62,13 @@ async def _speak_local(message: str, voice: str, speed: float = 1.25) -> None:
     )
     if not success or samples is None or sample_rate is None:
         raise RuntimeError("local text-to-speech failed")
+    return samples, sample_rate
+
+
+async def _speak_local(message: str, voice: str, speed: float = 1.25) -> None:
+    from voice_mode.audio_player import NonBlockingAudioPlayer
+
+    samples, sample_rate = await _synthesize_local(message, voice, speed)
     player = NonBlockingAudioPlayer()
     await asyncio.to_thread(player.play, samples, sample_rate, blocking=True)
 
@@ -117,7 +125,7 @@ class PersistentVoiceAudio:
         speed: float = 1.25,
         stream_factory=None,
         vad_factory=None,
-        speak_callable: SpeakCallable = _speak_local,
+        speak_callable: SpeakCallable | None = None,
         transcribe_callable: TranscribeCallable = _transcribe_local,
         listening_cue_callable: CueCallable = _play_listening_cue,
         submitted_cue_callable: CueCallable = _play_submitted_cue,
@@ -140,38 +148,49 @@ class PersistentVoiceAudio:
         self._endpoint_sink = endpoint_sink
         self.last_endpoint: EndpointDecision | None = None
         self._queue: queue.Queue[np.ndarray] = queue.Queue()
-        self._muted = threading.Event()
-        self._muted.set()
-        self._stream = None
         self._chunk_samples = int(SAMPLE_RATE * VAD_CHUNK_DURATION_MS / 1000)
+        self._session = AudioSession(
+            input_factory=self._create_stream,
+            input_kwargs={
+                "samplerate": SAMPLE_RATE,
+                "channels": CHANNELS,
+                "dtype": np.int16,
+                "callback": self._callback,
+                "blocksize": self._chunk_samples,
+            },
+            device_probe=self._default_input_device if stream_factory is None else None,
+        )
+        self._muted = self._session.muted
+
+    def _create_stream(self, **kwargs):
+        if self._stream_factory is None:
+            import sounddevice as sd
+
+            return sd.InputStream(**kwargs)
+        return self._stream_factory(**kwargs)
+
+    @staticmethod
+    def _default_input_device():
+        import sounddevice as sd
+
+        return sd.default.device[0]
 
     def _callback(self, indata, _frames, _time_info, _status) -> None:
         if not self._muted.is_set():
             self._queue.put(indata.copy())
 
     def start(self) -> None:
-        if self._stream is not None:
-            return
-        if self._stream_factory is None:
-            import sounddevice as sd
-
-            self._stream_factory = sd.InputStream
-        self._stream = self._stream_factory(
-            samplerate=SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype=np.int16,
-            callback=self._callback,
-            blocksize=self._chunk_samples,
-        )
-        self._stream.start()
+        self._session.start()
 
     def close(self) -> None:
-        stream, self._stream = self._stream, None
-        self._muted.set()
-        if stream is not None:
-            stream.stop()
-            stream.close()
+        self._session.close()
         self._drain()
+
+    def cancel_playback(self) -> bool:
+        return self._session.cancel_playback()
+
+    def reopen_device(self) -> None:
+        self._session.reopen()
 
     def _drain(self) -> None:
         while True:
@@ -201,12 +220,21 @@ class PersistentVoiceAudio:
         )
         self.last_endpoint = None
         deadline = time.monotonic() + self.listen_duration
+        next_device_check = time.monotonic() + 1.0
         self._muted.clear()
         try:
             while time.monotonic() < deadline:
+                if time.monotonic() >= next_device_check:
+                    if self._session.ensure_device():
+                        self._drain()
+                        self._session.unmute()
+                    next_device_check = time.monotonic() + 1.0
                 try:
                     chunk = self._queue.get(timeout=0.25).flatten()
                 except queue.Empty:
+                    if self._session.ensure_device():
+                        self._drain()
+                        self._session.unmute()
                     continue
                 vad_samples = int(16000 * VAD_CHUNK_DURATION_MS / 1000)
                 resampled = signal.resample(chunk, vad_samples).astype(np.int16)
@@ -274,7 +302,13 @@ class PersistentVoiceAudio:
         self.start()
         self._muted.set()
         self._drain()
-        await self._speak_callable(message, self.voice, self.speed)
+        if self._speak_callable is None:
+            samples, sample_rate = await _synthesize_local(
+                message, self.voice, self.speed
+            )
+            await self._session.play(samples, sample_rate)
+        else:
+            await self._speak_callable(message, self.voice, self.speed)
         self._drain()
 
     async def exchange(self, message: str) -> str | None:

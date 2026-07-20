@@ -165,6 +165,33 @@ async def test_stream_stays_open_across_speak_and_listen(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_default_speech_uses_the_cancellable_audio_session(monkeypatch):
+    played = []
+
+    async def synthesize(message, voice, speed):
+        assert (message, voice, speed) == ("answer", "am_michael", 1.25)
+        return np.array([0.25], dtype=np.float32), 24_000
+
+    async def play(samples, sample_rate):
+        played.append((samples, sample_rate))
+
+    monkeypatch.setattr(audio_module, "_synthesize_local", synthesize)
+    audio = PersistentVoiceAudio(
+        voice="am_michael",
+        listen_duration=20,
+        min_duration=1,
+        stream_factory=lambda **_kwargs: FakeStream(),
+    )
+    monkeypatch.setattr(audio._session, "play", play)
+
+    await audio.speak("answer")
+
+    assert played[0][0] == pytest.approx([0.25])
+    assert played[0][1] == 24_000
+    audio.close()
+
+
+@pytest.mark.asyncio
 async def test_cues_are_explicit_state_machine_events(monkeypatch):
     events = []
 

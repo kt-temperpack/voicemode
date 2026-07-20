@@ -49,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Broker protocol v2 adds privacy-safe request, adapter, thread, repository,
   turn-state, recovery, and capability diagnostics plus a named interrupt
   operation, while protocol v1 remains byte-compatible for existing clients.
+  One broker-owned audio session now serializes microphone device rotation,
+  retries failed reopens with bounded backoff, and cancels buffered speech
+  without replaying stale audio or creating a second stream owner.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default
