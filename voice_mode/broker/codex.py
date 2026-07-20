@@ -1,0 +1,163 @@
+"""Persistent Codex CLI adapter for the foreground voice loop."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+
+class CodexTurnError(RuntimeError):
+    """A user-facing failure from the Codex child process."""
+
+
+@dataclass(frozen=True)
+class CodexTurn:
+    display_text: str
+    spoken_summary: str
+    thread_id: str
+
+
+Runner = Callable[..., subprocess.CompletedProcess[str]]
+
+
+_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "display_text": {
+            "type": "string",
+            "description": "The complete final answer for the terminal, including useful technical detail.",
+        },
+        "spoken_summary": {
+            "type": "string",
+            "description": "A natural one or two sentence spoken recap, at most 45 words. Never read code, commands, tables, or paths aloud.",
+        },
+    },
+    "required": ["display_text", "spoken_summary"],
+    "additionalProperties": False,
+}
+
+
+def _fallback_summary(text: str, word_limit: int = 45) -> str:
+    clean = " ".join(text.replace("`", "").split())
+    words = clean.split()
+    if len(words) <= word_limit:
+        return clean
+    return " ".join(words[:word_limit]).rstrip(".,;:") + "…"
+
+
+def _parse_thread_id(stdout: str) -> str | None:
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "thread.started" and isinstance(event.get("thread_id"), str):
+            return event["thread_id"]
+    return None
+
+
+class CodexAdapter:
+    """Run one resumable Codex thread and split visual from spoken output."""
+
+    def __init__(
+        self,
+        repo_root: Path,
+        *,
+        executable: str = "codex",
+        sandbox: str = "workspace-write",
+        runner: Runner = subprocess.run,
+        event_sink: Callable[[dict], None] | None = None,
+    ) -> None:
+        self.repo_root = Path(repo_root).resolve()
+        self.executable = executable
+        self.sandbox = sandbox
+        self.runner = runner
+        self.event_sink = event_sink
+        self.thread_id: str | None = None
+
+    def _command(self, prompt: str, schema_path: Path, output_path: Path) -> list[str]:
+        shared = [
+            "--json",
+            "--output-schema",
+            str(schema_path),
+            "--output-last-message",
+            str(output_path),
+        ]
+        if self.thread_id:
+            return [self.executable, "exec", "resume", *shared, self.thread_id, prompt]
+        return [
+            self.executable,
+            "exec",
+            "--color",
+            "never",
+            "--sandbox",
+            self.sandbox,
+            "--cd",
+            str(self.repo_root),
+            *shared,
+            prompt,
+        ]
+
+    def _emit_events(self, stdout: str) -> None:
+        if self.event_sink is None:
+            return
+        for line in stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict):
+                self.event_sink(event)
+
+    def run_turn(self, prompt: str) -> CodexTurn:
+        if not prompt.strip():
+            raise ValueError("prompt must not be empty")
+        with tempfile.TemporaryDirectory(prefix="voicemode-codex-") as temp_dir:
+            temp = Path(temp_dir)
+            schema_path = temp / "response-schema.json"
+            output_path = temp / "last-message.json"
+            schema_path.write_text(json.dumps(_RESPONSE_SCHEMA), encoding="utf-8")
+            command = self._command(prompt, schema_path, output_path)
+            try:
+                completed = self.runner(
+                    command,
+                    cwd=self.repo_root,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+            except FileNotFoundError as exc:
+                raise CodexTurnError(f"Codex executable not found: {self.executable}") from exc
+
+            self._emit_events(completed.stdout)
+            if completed.returncode != 0:
+                detail = (completed.stderr or completed.stdout or "Codex exited without details").strip()
+                raise CodexTurnError(detail[-1000:])
+
+            started_thread = _parse_thread_id(completed.stdout)
+            if started_thread:
+                self.thread_id = started_thread
+            if not self.thread_id:
+                raise CodexTurnError("Codex did not return a thread ID")
+
+            try:
+                raw = output_path.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                raise CodexTurnError("Codex did not write a final response") from exc
+
+            try:
+                payload = json.loads(raw)
+            except json.JSONDecodeError:
+                payload = None
+            if isinstance(payload, dict):
+                display = payload.get("display_text")
+                spoken = payload.get("spoken_summary")
+                if isinstance(display, str) and display.strip() and isinstance(spoken, str) and spoken.strip():
+                    return CodexTurn(display.strip(), _fallback_summary(spoken), self.thread_id)
+            if not raw:
+                raise CodexTurnError("Codex returned an empty final response")
+            return CodexTurn(raw, _fallback_summary(raw), self.thread_id)

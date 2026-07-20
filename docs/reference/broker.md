@@ -1,22 +1,39 @@
 # Conversation Broker
 
-The conversation broker is an experimental, audio-free foundation for a future
-always-available voice session. This first slice provides one local process,
-one active Codex session, a strict protocol, and a bounded turn slot; it does
-not listen to a microphone, detect a wake word, synthesize speech, or connect to
-Codex automatically yet.
+The conversation broker is a foreground hands-free loop for Codex. It listens
+through VoiceMode's configured local speech service, wakes on `Computer`, runs
+the request in one persistent Codex CLI thread, prints the complete answer, and
+speaks a separate one- or two-sentence summary. Follow-up speech stays in the
+same Codex thread until silence or an explicit sleep phrase closes the window.
 
 ## Run and inspect it
 
-The broker runs in the foreground so process ownership and failures stay
-visible:
+Run it from the repository you want Codex to work in. The process stays in the
+foreground so the transcript, Codex activity, and failures remain visible:
 
 ```bash
 voicemode broker run
+voicemode broker converse
 voicemode broker status
 voicemode broker status --json
 voicemode broker stop
 ```
+
+`run` and `converse` start the same hands-free loop. Say `Computer, <request>`
+to begin, continue speaking naturally for follow-ups, say `go to sleep` to
+return to wake-only listening, or say `exit voice mode` to stop. The default
+voice is the local `am_michael` voice. Use `--repo`, `--voice`, `--wake-phrase`,
+and `--listen-duration` to override the everyday defaults.
+
+The broker starts its own resumable `codex exec` thread in the selected
+repository. It does not attach to an already-open Codex UI conversation, so the
+voice transcript lives in the broker terminal while file changes land in the
+same working tree. Codex starts with the `workspace-write` sandbox by default;
+change `VOICEMODE_BROKER_CODEX_SANDBOX` only when the repository needs a
+different policy.
+
+Use `voicemode broker run --daemon-only` when developing against the socket
+protocol without microphone, speech, or Codex integration.
 
 Use `--socket PATH` on any command to override the default
 `~/.voicemode/broker.sock`. `status` exits 1 when no broker is running; its JSON
@@ -42,6 +59,9 @@ verifying its type and owner. Permission errors mean the socket directory or
 path is not safely owned by the current user; correct that ownership or choose
 an owner-controlled path with `--socket`.
 
-Future slices will add local activation, audio capture and playback, the Codex
-adapter, repository-scoped memory, and optional model evaluation. They are not
-part of this command surface yet.
+Configuration is environment-backed: `VOICEMODE_BROKER_WAKE_PHRASE`,
+`VOICEMODE_BROKER_VOICE`, `VOICEMODE_BROKER_LISTEN_DURATION_SECONDS`,
+`VOICEMODE_BROKER_MIN_LISTEN_DURATION_SECONDS`,
+`VOICEMODE_BROKER_CODEX_EXECUTABLE`, and `VOICEMODE_BROKER_CODEX_SANDBOX`.
+Repository-scoped long-term memory and optional wake-model evaluation remain
+later slices; normal Codex session context already persists across follow-ups.

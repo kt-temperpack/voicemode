@@ -724,6 +724,18 @@ BROKER_WRITE_TIMEOUT_SECONDS = _bounded_env_number(
 BROKER_LONG_POLL_MAX_SECONDS = _bounded_env_number(
     "VOICEMODE_BROKER_LONG_POLL_MAX_SECONDS", 120.0, 1.0, 300.0, float
 )
+BROKER_WAKE_PHRASE = os.getenv("VOICEMODE_BROKER_WAKE_PHRASE", "Computer").strip() or "Computer"
+BROKER_VOICE = os.getenv("VOICEMODE_BROKER_VOICE", "am_michael").strip() or "am_michael"
+BROKER_LISTEN_DURATION_SECONDS = _bounded_env_number(
+    "VOICEMODE_BROKER_LISTEN_DURATION_SECONDS", 30.0, 2.0, 120.0, float
+)
+BROKER_MIN_LISTEN_DURATION_SECONDS = _bounded_env_number(
+    "VOICEMODE_BROKER_MIN_LISTEN_DURATION_SECONDS", 1.0, 0.0, 10.0, float
+)
+BROKER_CODEX_EXECUTABLE = os.getenv("VOICEMODE_BROKER_CODEX_EXECUTABLE", "codex").strip() or "codex"
+BROKER_CODEX_SANDBOX = os.getenv("VOICEMODE_BROKER_CODEX_SANDBOX", "workspace-write").strip()
+if BROKER_CODEX_SANDBOX not in {"read-only", "workspace-write", "danger-full-access"}:
+    BROKER_CODEX_SANDBOX = "workspace-write"
 
 # Hardening (F4 / VM-1697): a `pause` holds the global audio lock while playback
 # waits, so a pause that is never resumed (a forgotten/buggy trigger, or a

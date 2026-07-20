@@ -252,9 +252,16 @@ class BrokerServer:
 
 
 class BrokerDispatcher:
-    def __init__(self, runtime: BrokerRuntime, stop_callback: Callable[[], None] | None = None) -> None:
+    def __init__(
+        self,
+        runtime: BrokerRuntime,
+        stop_callback: Callable[[], None] | None = None,
+        *,
+        audio_enabled: bool = False,
+    ) -> None:
         self.runtime = runtime
         self.stop_callback = stop_callback
+        self.audio_enabled = audio_enabled
 
     @staticmethod
     def _session_payload(session, age_seconds: float) -> dict:
@@ -283,7 +290,7 @@ class BrokerDispatcher:
         if isinstance(request, OpenRequest):
             session = self.runtime.open_session(request.codex_session_id, request.repo_root)
             age = self.runtime.snapshot().session_age_seconds or 0.0
-            capabilities = BrokerCapabilities()
+            capabilities = BrokerCapabilities(audio_enabled=self.audio_enabled)
             return {
                 "kind": "session",
                 "session": self._session_payload(session, age),
@@ -322,9 +329,9 @@ class BrokerDispatcher:
         raise BrokerError(BrokerErrorCode.UNKNOWN_OPERATION, "unknown operation")
 
 
-def create_broker(socket_path: Path | None = None, *, event_sink=None):
+def create_broker(socket_path: Path | None = None, *, event_sink=None, audio_enabled: bool = False):
     runtime = BrokerRuntime(event_sink=event_sink)
-    dispatcher = BrokerDispatcher(runtime)
+    dispatcher = BrokerDispatcher(runtime, audio_enabled=audio_enabled)
     server = BrokerServer(socket_path or BROKER_SOCKET_PATH, dispatcher, event_sink=event_sink)
     dispatcher.stop_callback = server.stop
     return runtime, dispatcher, server

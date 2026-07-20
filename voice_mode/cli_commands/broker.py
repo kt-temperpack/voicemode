@@ -10,7 +10,15 @@ import click
 from voice_mode.broker import BrokerError
 from voice_mode.broker.client import BrokerClient, BrokerUnavailable
 from voice_mode.broker.server import run_broker
-from voice_mode.config import BROKER_SOCKET_PATH
+from voice_mode.config import (
+    BROKER_CODEX_EXECUTABLE,
+    BROKER_CODEX_SANDBOX,
+    BROKER_LISTEN_DURATION_SECONDS,
+    BROKER_MIN_LISTEN_DURATION_SECONDS,
+    BROKER_SOCKET_PATH,
+    BROKER_VOICE,
+    BROKER_WAKE_PHRASE,
+)
 
 
 @click.group(name="broker")
@@ -31,15 +39,69 @@ def _socket_option(function):
 
 
 @broker.command("run")
+@click.option(
+    "--daemon-only",
+    is_flag=True,
+    help="Run only the local socket broker, without microphone or Codex.",
+)
+@click.option("--repo", "repo_root", type=click.Path(path_type=Path), default=Path.cwd, show_default="current directory")
+@click.option("--wake-phrase", default=BROKER_WAKE_PHRASE, show_default=True)
+@click.option("--voice", default=BROKER_VOICE, show_default=True)
+@click.option("--listen-duration", type=float, default=BROKER_LISTEN_DURATION_SECONDS, show_default=True)
 @_socket_option
-def broker_run(socket_path: Path):
-    """Run the broker in the foreground."""
+def broker_run(
+    socket_path: Path,
+    listen_duration: float,
+    voice: str,
+    wake_phrase: str,
+    repo_root: Path,
+    daemon_only: bool,
+):
+    """Run hands-free Codex in the foreground."""
     try:
-        run_broker(socket_path)
+        if daemon_only:
+            run_broker(socket_path)
+        else:
+            from voice_mode.broker.handsfree import run_handsfree_broker
+
+            run_handsfree_broker(
+                socket_path,
+                repo_root=repo_root,
+                wake_phrase=wake_phrase,
+                voice=voice,
+                listen_duration=listen_duration,
+                min_duration=BROKER_MIN_LISTEN_DURATION_SECONDS,
+                codex_executable=BROKER_CODEX_EXECUTABLE,
+                codex_sandbox=BROKER_CODEX_SANDBOX,
+            )
     except OSError as error:
         raise click.ClickException(
             f"could not start broker at {socket_path}: {error}. Check the path and permissions."
         ) from error
+
+
+@broker.command("converse")
+@click.option("--repo", "repo_root", type=click.Path(path_type=Path), default=Path.cwd, show_default="current directory")
+@click.option("--wake-phrase", default=BROKER_WAKE_PHRASE, show_default=True)
+@click.option("--voice", default=BROKER_VOICE, show_default=True)
+@click.option("--listen-duration", type=float, default=BROKER_LISTEN_DURATION_SECONDS, show_default=True)
+@_socket_option
+def broker_converse(
+    socket_path: Path,
+    listen_duration: float,
+    voice: str,
+    wake_phrase: str,
+    repo_root: Path,
+):
+    """Explicit alias for the foreground hands-free Codex loop."""
+    broker_run.callback(
+        socket_path=socket_path,
+        listen_duration=listen_duration,
+        voice=voice,
+        wake_phrase=wake_phrase,
+        repo_root=repo_root,
+        daemon_only=False,
+    )
 
 
 @broker.command("status")
