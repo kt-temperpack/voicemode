@@ -26,6 +26,7 @@ voicemode broker stop
 ```
 
 `run` and `converse` start the same hands-free loop. Say `Computer, <request>`
+or `Hey Computer, <request>`
 to begin, continue speaking naturally for follow-ups, say `go to sleep` to
 return to wake-only listening, or say `exit voice mode` to stop. The default
 voice is the local `am_michael` voice. Use `--repo`, `--voice`, `--wake-phrase`,

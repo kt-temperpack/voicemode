@@ -20,7 +20,7 @@ EXIT_PHRASES = {"exit voice mode", "quit voice mode", "goodbye", "shut down"}
 
 def wake_command(text: str, wake_phrase: str) -> str | None:
     match = re.match(
-        rf"^\s*{re.escape(wake_phrase)}(?:\s*[,;:\-]\s*|\s+|$)(.*?)\s*$",
+        rf"^\s*(?:hey[\s,]+)?{re.escape(wake_phrase)}(?:\s*[,;:\-]\s*|\s+|$)(.*?)\s*$",
         text,
         flags=re.IGNORECASE,
     )

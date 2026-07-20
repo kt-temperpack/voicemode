@@ -34,6 +34,8 @@ class FakeCodex:
 
 def test_wake_and_control_parsing_is_strict():
     assert wake_command("Computer, check tests", "Computer") == "check tests"
+    assert wake_command("Hey Computer, check tests", "Computer") == "check tests"
+    assert wake_command("hey, computer", "Computer") == ""
     assert wake_command("computer", "Computer") == ""
     assert wake_command("computerized", "Computer") is None
     assert wake_command("my computer is slow", "Computer") is None

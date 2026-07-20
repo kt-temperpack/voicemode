@@ -25,7 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no longer terminate the broker process. The always-listening broker uses one
   confirmation tone after a real transcript; start tones, empty timeout
   windows, and blank-audio transcripts stay silent so cues cannot interrupt a
-  prompt in progress.
+  prompt in progress. Both `Computer` and `Hey Computer` now activate the wake
+  parser.
 
 - **Wall-clock time widget for `converse()` results (VM-1961)** — opt-in
   `time_in_response` param / `VOICEMODE_TIME_IN_RESPONSE` env var (default
